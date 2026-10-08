@@ -9,29 +9,70 @@ const ADMIN_CODE = process.env.ADMIN_CODE || "h4h-admin";
 const DATA_FILE = path.join(__dirname, "data.json");
 const PUBLIC = path.join(__dirname, "public");
 
-// ---------- storage (one JSON file) ----------
-function load() {
-  let db;
-  try { db = JSON.parse(fs.readFileSync(DATA_FILE, "utf8")); }
-  catch { db = seed(); }
-  db.users ||= {}; db.events ||= []; db.adjustments ||= [];
-  return db;
+// ---------- storage ----------
+// With SUPABASE_URL + SUPABASE_SECRET_KEY set, all data is saved in a Supabase table (survives restarts).
+// Without them (local testing), data is saved to data.json instead.
+const SB_URL = (process.env.SUPABASE_URL || "").replace(/\/+$/, "");
+const SB_KEY = process.env.SUPABASE_SECRET_KEY || "";
+const useSupabase = Boolean(SB_URL && SB_KEY);
+const sbHeaders = () => {
+  const h = { apikey: SB_KEY, "Content-Type": "application/json" };
+  if (SB_KEY.startsWith("eyJ")) h.Authorization = "Bearer " + SB_KEY; // legacy JWT-style keys
+  return h;
+};
+
+let CACHE = null;   // the whole database lives in memory; every change is written out right after
+function load() { return CACHE; }
+
+async function writeOut(db) {
+  if (useSupabase) {
+    const r = await fetch(`${SB_URL}/rest/v1/h4h_store?on_conflict=key`, {
+      method: "POST",
+      headers: { ...sbHeaders(), Prefer: "resolution=merge-duplicates,return=minimal" },
+      body: JSON.stringify([{ key: "main", value: db, updated_at: new Date().toISOString() }])
+    });
+    if (!r.ok) throw new Error(`Supabase write failed (${r.status}): ${await r.text()}`);
+  } else {
+    fs.writeFileSync(DATA_FILE + ".tmp", JSON.stringify(db, null, 2));
+    fs.renameSync(DATA_FILE + ".tmp", DATA_FILE);
+  }
 }
-function save(db) {
-  fs.writeFileSync(DATA_FILE + ".tmp", JSON.stringify(db, null, 2));
-  fs.renameSync(DATA_FILE + ".tmp", DATA_FILE);
+let saving = false, again = false;
+async function flush() {
+  if (saving) { again = true; return; }
+  saving = true;
+  try { do { again = false; await writeOut(CACHE); } while (again); }
+  catch (e) { console.error("SAVE FAILED, retrying in 5s:", e.message); setTimeout(flush, 5000); }
+  finally { saving = false; }
 }
-function seed() {
+function save(db) { CACHE = db; flush(); }
+
+function seedData() {
   const day = (n) => { const d = new Date(); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
-  const db = {
+  return {
     users: {}, adjustments: [],
     events: [
       { id: "e1", title: "Food Pantry Sorting", description: "Sort and shelve donated goods so families can shop on Saturday.", location: "Community Center, Room 2", date: day(3), start: "16:00", end: "18:00", capacity: 10, signups: [], attendance: {} },
       { id: "e2", title: "Park Cleanup", description: "Bring gloves and water. Bags and grabbers provided.", location: "Main entrance of the park", date: day(9), start: "10:00", end: "13:00", capacity: 15, signups: [], attendance: {} }
     ]
   };
-  save(db);
-  return db;
+}
+async function init() {
+  let db = null;
+  if (useSupabase) {
+    const r = await fetch(`${SB_URL}/rest/v1/h4h_store?key=eq.main&select=value`, { headers: sbHeaders() });
+    if (!r.ok) throw new Error(`Could not read from Supabase (${r.status}): ${await r.text()}`);
+    const rows = await r.json();
+    db = rows.length ? rows[0].value : null;
+  } else {
+    try { db = JSON.parse(fs.readFileSync(DATA_FILE, "utf8")); } catch {}
+  }
+  const fresh = !db;
+  db = db || seedData();
+  db.users ||= {}; db.events ||= []; db.adjustments ||= [];
+  CACHE = db;
+  if (fresh) await writeOut(db);
+  console.log(`Storage: ${useSupabase ? "Supabase" : "local data.json"} (${Object.keys(db.users).length} volunteers, ${db.events.length} events)`);
 }
 
 // ---------- helpers ----------
@@ -266,7 +307,9 @@ const server = http.createServer(async (req, res) => {
   send(res, 200, fs.readFileSync(full), types[path.extname(full)] || "application/octet-stream");
 });
 
-server.listen(PORT, () => {
-  console.log(`Hands for Humankind Volunteer Hub running at http://localhost:${PORT}`);
-  if (!process.env.ADMIN_CODE) console.log('Admin code is the default "h4h-admin". Set ADMIN_CODE before going live.');
-});
+init().then(() => {
+  server.listen(PORT, () => {
+    console.log(`Hands for Humankind Volunteer Hub running at http://localhost:${PORT}`);
+    if (!process.env.ADMIN_CODE) console.log('Admin code is the default "h4h-admin". Set ADMIN_CODE before going live.');
+  });
+}).catch((e) => { console.error("STARTUP FAILED:", e.message); process.exit(1); }); // never start empty and overwrite real data
