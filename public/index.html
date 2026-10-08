@@ -103,6 +103,9 @@
   th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; }
   th { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
   .scroll { overflow-x: auto; }
+  .badge { background: var(--sun); color: var(--ink); border-radius: 99px; padding: 1px 8px; font-size: 13px; margin-left: 4px; }
+  .tabs button[aria-selected="true"] .badge { background: #fff; }
+  h4 { font-family: var(--display); font-size: 17px; margin: 0; }
   .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--ink); color: #fff; padding: 12px 20px; border-radius: 10px; z-index: 9; }
   footer { border-top: 1px solid var(--line); padding: 24px 0; color: var(--muted); font-size: 14px; }
 </style>
@@ -116,7 +119,7 @@
   </div>
 </header>
 <div id="view"></div>
-<footer><div class="wrap">Hands for Humankind (H4H) · Hours count once an event you joined has ended.</div></footer>
+<footer><div class="wrap">Hands for Humankind (H4H) · Hours are credited after an officer approves your attendance.</div></footer>
 <div id="toast" class="toast" hidden></div>
 
 <script>
@@ -232,13 +235,13 @@ async function viewDashboard() {
   const d = await api("/me");
   const draw = () => {
     document.querySelectorAll(".tabs button").forEach((b) => b.setAttribute("aria-selected", b.dataset.t === dashTab));
-    const rows = (list, kind) => list.map((e) => `<div class="row"><div class="top"><strong>${esc(e.title)}</strong><span class="pill ${kind}">${kind === "joined" ? "Joined" : kind === "waitlisted" ? "Waitlist #" + e.waitlistPosition : fmtHours(e.hours) + " hrs"}</span></div>
+    const rows = (list, kind) => list.map((e) => `<div class="row"><div class="top"><strong>${esc(e.title)}</strong><span class="pill ${kind === "done" ? (e.approval === "approved" ? "joined" : e.approval === "absent" ? "past" : "waitlisted") : kind}">${kind === "joined" ? "Joined" : kind === "waitlisted" ? "Waitlist #" + e.waitlistPosition : e.approval === "approved" ? fmtHours(e.credited) + " hrs" : e.approval === "absent" ? "Not credited" : "Pending approval"}</span></div>
       <div class="meta"><span>📅 ${fmtDate(e.date)}</span><span>🕒 ${fmtTime(e.start)} – ${fmtTime(e.end)}</span><span>⏱ ${fmtHours(e.hours)} hrs</span></div>
       ${e.past ? "" : `<div><button class="btn ghost sm" data-leave="${e.id}">${kind === "joined" ? "Cancel" : "Leave waitlist"}</button></div>`}</div>`).join("");
     const body = $("#tabBody");
     if (dashTab === "overview") {
       body.innerHTML = `<div class="stats">
-        <div class="stat hours"><b>${fmtHours(d.hours)}</b><small>Hours Volunteered</small></div>
+        <div class="stat hours"><b>${fmtHours(d.hours)}</b><small>Approved Hours${d.pendingHours ? ` · ${fmtHours(d.pendingHours)} pending` : ""}</small></div>
         <div class="stat"><b>${d.joinedCount}</b><small>Opportunities Joined</small></div>
         <div class="stat"><b>${d.upcoming.length}</b><small>Upcoming Activities</small></div>
         <div class="stat"><b>${d.waitlisted.length}</b><small>Waitlisted</small></div></div>
@@ -246,7 +249,8 @@ async function viewDashboard() {
         <div class="panel"><h2>Recent Completed</h2>${rows(d.completed.slice(0, 5), "done") || `<div class="empty">No completed activities yet</div>`}</div></div>`;
     } else if (dashTab === "activities") {
       body.innerHTML = `<div class="panel"><h2 style="font-size:24px;margin-bottom:14px">Upcoming</h2>${rows(d.upcoming, "joined") + rows(d.waitlisted, "waitlisted") || `<div class="empty">No upcoming activities. <a href="#/">Browse events</a></div>`}
-        <h2 style="font-size:24px;margin:24px 0 14px">Completed</h2>${rows(d.completed, "done") || `<div class="empty">No completed activities yet</div>`}</div>`;
+        <h2 style="font-size:24px;margin:24px 0 14px">Completed</h2>${rows(d.completed, "done") || `<div class="empty">No completed activities yet</div>`}
+        ${d.adjustments.length ? `<h2 style="font-size:24px;margin:24px 0 14px">Extra hours</h2>${d.adjustments.map((a) => `<div class="row"><div class="top"><strong>${a.hours > 0 ? "+" : ""}${fmtHours(a.hours)} hrs</strong><span class="hint">${esc(a.date)}</span></div><div>${esc(a.note)}</div></div>`).join("")}` : ""}</div>`;
     } else {
       body.innerHTML = `<div class="panel" style="max-width:520px"><form id="pf"><div class="field"><label>Username</label><input value="${esc(d.username)}" disabled></div>
         <div class="field"><label for="pn">Display name</label><input id="pn" maxlength="40" value="${esc(d.displayName)}"></div>
@@ -259,6 +263,7 @@ async function viewDashboard() {
   draw();
 }
 
+let adminTab = "review";
 async function viewAdmin() {
   renderChrome("admin");
   const gate = () => {
@@ -272,10 +277,94 @@ async function viewAdmin() {
   if (!store.admin) return gate();
   try { await api("/admin/check"); } catch { store.admin = null; return gate(); }
 
-  const [{ events }, { volunteers }] = await Promise.all([api("/events"), api("/admin/volunteers")]);
   $("#view").innerHTML = `<main class="wrap">
     <div class="section-title"><h2>Admin</h2><button class="btn ghost sm" id="lock">Lock</button></div>
-    <div class="panel" style="margin-bottom:20px"><h3 style="margin-bottom:14px">New event</h3>
+    <div class="tabs" role="tablist">
+      <button role="tab" data-t="review">Review hours <span class="badge" id="pendBadge" hidden></span></button>
+      <button role="tab" data-t="volunteers">Volunteers</button>
+      <button role="tab" data-t="events">Events</button>
+    </div><div id="adminBody"></div></main>`;
+  $("#lock").onclick = () => { store.admin = null; viewAdmin(); };
+  const body = $("#adminBody");
+  const draw = async () => {
+    document.querySelectorAll(".tabs button").forEach((b) => b.setAttribute("aria-selected", b.dataset.t === adminTab));
+    body.innerHTML = `<p class="hint">Loading...</p>`;
+    try { await ({ review: drawReview, volunteers: drawVolunteers, events: drawEvents })[adminTab](body, draw); }
+    catch (e) { body.innerHTML = `<p class="err">${esc(e.message)}</p>`; }
+  };
+  document.querySelectorAll(".tabs button").forEach((b) => (b.onclick = () => { adminTab = b.dataset.t; draw(); }));
+  draw();
+}
+
+const approvalPill = (a, h) => a === "approved" ? `<span class="pill joined">Approved · ${fmtHours(h)} hrs</span>` : a === "absent" ? `<span class="pill past">Absent</span>` : `<span class="pill waitlisted">Pending</span>`;
+
+async function drawReview(body, redraw) {
+  const { events, pending } = await api("/admin/review");
+  const badge = $("#pendBadge"); badge.hidden = !pending; badge.textContent = pending;
+  if (!events.length) { body.innerHTML = `<div class="empty">No finished events with volunteers yet. Once an event ends, its volunteers show up here for you to approve.</div>`; return; }
+  body.innerHTML = `<p class="hint" style="margin:0 0 14px">Volunteers get hours only after you approve them. Edit the hours box first if someone stayed a shorter or longer time.</p>` +
+    events.map((e) => {
+      const pend = e.people.filter((p) => p.approval === "pending").length;
+      return `<section class="panel" style="margin-bottom:16px" data-ev="${esc(e.id)}">
+        <div class="section-title" style="margin-bottom:10px"><div><h3 style="font-size:22px">${esc(e.title)}</h3><span class="hint">${fmtDate(e.date)} · ${fmtTime(e.start)} – ${fmtTime(e.end)} · ${fmtHours(e.hours)} hrs</span></div>
+        ${pend ? `<button class="btn sm" data-all="${esc(e.id)}">Approve all ${pend} pending</button>` : `<span class="pill joined">All reviewed</span>`}</div>
+        <div class="scroll"><table><thead><tr><th>Volunteer</th><th>Status</th><th>Hours</th><th></th></tr></thead><tbody>
+        ${e.people.map((p) => `<tr data-u="${esc(p.username)}"><td>${esc(p.name)}<br><span class="hint">@${esc(p.username)}</span></td><td>${approvalPill(p.approval, p.credited)}</td>
+          <td><input type="number" class="hrs" min="0" max="24" step="0.25" value="${p.approval === "approved" ? p.credited : e.hours}" aria-label="Hours for ${esc(p.name)}" style="width:90px"></td>
+          <td style="white-space:nowrap"><button class="btn sm" data-act="approved">Approve</button> <button class="btn ghost sm" data-act="absent">Absent</button> ${p.approval !== "pending" ? `<button class="btn ghost sm" data-act="pending">Undo</button>` : ""}</td></tr>`).join("")}
+        </tbody></table></div></section>`;
+    }).join("");
+  body.querySelectorAll("[data-all]").forEach((b) => (b.onclick = async () => { const r = await api(`/admin/events/${b.dataset.all}/approve-all`, "POST"); toast(`Approved ${r.approved}.`); redraw(); }));
+  body.querySelectorAll("tr[data-u] [data-act]").forEach((b) => (b.onclick = async () => {
+    const tr = b.closest("tr"), ev = b.closest("[data-ev]").dataset.ev;
+    try { await api(`/admin/events/${ev}/attendance`, "POST", { username: tr.dataset.u, status: b.dataset.act, hours: $(".hrs", tr).value }); redraw(); }
+    catch (e) { toast(e.message); }
+  }));
+}
+
+async function drawVolunteers(body, redraw) {
+  const { volunteers } = await api("/admin/volunteers");
+  body.innerHTML = `<div class="panel">
+    <div class="section-title" style="margin-bottom:12px"><h3 style="font-size:22px">${volunteers.length} volunteer${volunteers.length === 1 ? "" : "s"}</h3>
+      <div style="display:flex;gap:8px;flex-wrap:wrap"><input id="vq" placeholder="Search name or username" aria-label="Search volunteers" style="width:220px"><button class="btn ghost" id="csv">Export CSV</button></div></div>
+    <div class="scroll"><table><thead><tr><th>Volunteer</th><th>Events</th><th>Approved hrs</th><th>Pending hrs</th><th></th></tr></thead><tbody id="vrows"></tbody></table></div></div>
+    <div id="vdetail" style="margin-top:16px"></div>`;
+  const rows = () => {
+    const q = $("#vq").value.trim().toLowerCase();
+    $("#vrows").innerHTML = volunteers.filter((v) => !q || v.name.toLowerCase().includes(q) || v.username.includes(q)).map((v) =>
+      `<tr><td>${esc(v.name)}<br><span class="hint">@${esc(v.username)}</span></td><td>${v.events}</td><td><strong>${fmtHours(v.hours)}</strong></td><td>${v.pendingHours ? fmtHours(v.pendingHours) : "–"}</td><td><button class="btn ghost sm" data-m="${esc(v.username)}">Manage</button></td></tr>`).join("") || `<tr><td colspan="5" class="hint">No volunteers match.</td></tr>`;
+    $("#vrows").querySelectorAll("[data-m]").forEach((b) => (b.onclick = () => detail(b.dataset.m)));
+  };
+  $("#vq").oninput = rows; rows();
+  $("#csv").onclick = async () => {
+    const r = await fetch("/api/admin/export", { headers: { "x-admin-code": store.admin } });
+    const url = URL.createObjectURL(await r.blob()), a = document.createElement("a");
+    a.href = url; a.download = "h4h-volunteer-hours.csv"; a.click(); URL.revokeObjectURL(url);
+  };
+  async function detail(u) {
+    const d = await api("/admin/volunteers/" + encodeURIComponent(u));
+    $("#vdetail").innerHTML = `<div class="panel"><div class="section-title"><h3 style="font-size:22px">${esc(d.name)} <span class="hint">@${esc(d.username)}</span></h3><span class="pill joined">${fmtHours(d.hours)} hrs approved</span></div>
+      <h4 style="margin:14px 0 8px">Events</h4>
+      ${[...d.completed, ...d.upcoming, ...d.waitlisted].map((e) => `<div class="row"><div class="top"><strong>${esc(e.title)}</strong>${e.past ? approvalPill(e.approval, e.credited) : e.status === "joined" ? `<span class="pill joined">Upcoming</span>` : `<span class="pill waitlisted">Waitlist</span>`}</div><div class="meta"><span>📅 ${fmtDate(e.date)}</span><span>⏱ ${fmtHours(e.hours)} hrs</span></div></div>`).join("") || `<div class="empty">No events yet.</div>`}
+      <h4 style="margin:18px 0 8px">Extra hours</h4>
+      ${d.adjustments.map((a) => `<div class="row"><div class="top"><span><strong>${a.hours > 0 ? "+" : ""}${fmtHours(a.hours)} hrs</strong> · ${esc(a.note)} <span class="hint">(${esc(a.date)})</span></span><button class="btn danger sm" data-rm="${esc(a.id)}">Remove</button></div></div>`).join("") || `<p class="hint">None.</p>`}
+      <form id="adj" class="form-grid" style="margin-top:12px;align-items:end"><div class="field"><label for="ah">Hours (use - to subtract)</label><input id="ah" type="number" step="0.25" required></div>
+        <div class="field" style="grid-column:span 2"><label for="an">Reason</label><input id="an" maxlength="120" required placeholder="e.g. Helped set up the bake sale"></div>
+        <div class="field"><button class="btn" type="submit">Add hours</button></div></form><p class="err" id="aerr" role="alert"></p>
+      <hr style="border:0;border-top:1px solid var(--line);margin:16px 0"><button class="btn danger sm" id="rmv">Remove volunteer</button> <span class="hint">Deletes the account, sign-ups and hours.</span></div>`;
+    $("#vdetail").scrollIntoView({ behavior: "smooth", block: "nearest" });
+    $("#adj").onsubmit = async (ev) => { ev.preventDefault(); try { await api("/admin/adjustments", "POST", { username: u, hours: $("#ah").value, note: $("#an").value }); toast("Hours added."); redraw(); } catch (e) { $("#aerr").textContent = e.message; } };
+    $("#vdetail").querySelectorAll("[data-rm]").forEach((b) => (b.onclick = async () => { await api("/admin/adjustments/" + b.dataset.rm, "DELETE"); toast("Removed."); redraw(); }));
+    $("#rmv").onclick = async (ev) => {
+      if (ev.target.dataset.sure !== "1") { ev.target.dataset.sure = "1"; ev.target.textContent = "Click again to confirm"; return; }
+      await api("/admin/volunteers/" + encodeURIComponent(u), "DELETE"); toast("Volunteer removed."); redraw();
+    };
+  }
+}
+
+async function drawEvents(body, redraw) {
+  const { events } = await api("/events");
+  body.innerHTML = `<div class="panel" style="margin-bottom:20px"><h3 style="margin-bottom:14px">New event</h3>
       <form id="nf"><div class="form-grid">
         <div class="field"><label for="nt">Title</label><input id="nt" required></div>
         <div class="field"><label for="nl">Location</label><input id="nl"></div>
@@ -285,27 +374,23 @@ async function viewAdmin() {
         <div class="field"><label for="nc">Spots</label><input id="nc" type="number" min="1" value="10" required></div></div>
       <div class="field"><label for="nx">Description</label><textarea id="nx" rows="2"></textarea></div>
       <button class="btn" type="submit">Publish event</button><p class="err" id="err" role="alert"></p></form></div>
-    <div class="panel" style="margin-bottom:20px"><h3 style="margin-bottom:14px">Events and rosters</h3><div class="scroll"><table>
+    <div class="panel"><h3 style="margin-bottom:14px">All events</h3><div class="scroll"><table>
       <thead><tr><th>Event</th><th>Date</th><th>Filled</th><th></th></tr></thead>
       <tbody>${events.map((e) => `<tr><td>${esc(e.title)}</td><td>${fmtDate(e.date)}</td><td>${e.taken}/${e.capacity}${e.waitlist ? ` (+${e.waitlist})` : ""}</td>
         <td style="white-space:nowrap"><button class="btn ghost sm" data-roster="${e.id}">Roster</button> <button class="btn danger sm" data-del="${e.id}">Delete</button></td></tr>
-        <tr hidden id="r-${e.id}"><td colspan="4" class="hint"></td></tr>`).join("")}</tbody></table></div></div>
-    <div class="panel"><h3 style="margin-bottom:14px">Volunteer hours</h3><div class="scroll"><table>
-      <thead><tr><th>Username</th><th>Name</th><th>Events</th><th>Hours</th></tr></thead>
-      <tbody>${volunteers.map((v) => `<tr><td>${esc(v.username)}</td><td>${esc(v.name)}</td><td>${v.events}</td><td>${fmtHours(v.hours)}</td></tr>`).join("") || `<tr><td colspan="4" class="hint">No volunteers yet.</td></tr>`}</tbody></table></div></div></main>`;
-  $("#lock").onclick = () => { store.admin = null; viewAdmin(); };
+        <tr hidden id="r-${e.id}"><td colspan="4" class="hint"></td></tr>`).join("")}</tbody></table></div></div>`;
   $("#nf").onsubmit = async (ev) => {
     ev.preventDefault();
     try {
       await api("/admin/events", "POST", { title: $("#nt").value, location: $("#nl").value, date: $("#nd").value, start: $("#ns").value, end: $("#ne").value, capacity: $("#nc").value, description: $("#nx").value });
-      toast("Event published."); viewAdmin();
+      toast("Event published."); redraw();
     } catch (e) { $("#err").textContent = e.message; }
   };
-  document.querySelectorAll("[data-del]").forEach((b) => (b.onclick = async () => {
+  body.querySelectorAll("[data-del]").forEach((b) => (b.onclick = async () => {
     if (b.dataset.sure !== "1") { b.dataset.sure = "1"; b.textContent = "Click again to delete"; return; }
-    await api("/admin/events/" + b.dataset.del, "DELETE"); toast("Event deleted."); viewAdmin();
+    await api("/admin/events/" + b.dataset.del, "DELETE"); toast("Event deleted."); redraw();
   }));
-  document.querySelectorAll("[data-roster]").forEach((b) => (b.onclick = async () => {
+  body.querySelectorAll("[data-roster]").forEach((b) => (b.onclick = async () => {
     const row = $("#r-" + b.dataset.roster), cell = row.firstElementChild;
     if (!row.hidden) { row.hidden = true; return; }
     const { roster } = await api(`/admin/events/${b.dataset.roster}/roster`);
