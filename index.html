@@ -1,0 +1,330 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hands for Humankind Volunteers</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  /* Layout: sticky top nav, centered 1080px column. Pages: Events, My Dashboard (3 tabs), Admin. */
+  :root {
+    --ink: #0a2e3d;        /* deep ocean, from the logo's blue */
+    --paper: #f3f8f8;      /* page ground, faint teal tint */
+    --card: #ffffff;
+    --line: #d5e3e4;
+    --muted: #55707a;
+    --brand: #0e75a0;      /* logo blue: buttons, links */
+    --teal: #188c8c;       /* logo teal: accents */
+    --sun: #6fd3cb;        /* light teal highlight on dark ground */
+    --warn: #b4531a;
+    --display: "Bricolage Grotesque", "Trebuchet MS", sans-serif;
+    --body: "DM Sans", system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 16px/1.5 var(--body); color: var(--ink); background: var(--paper); }
+  h1, h2, h3 { font-family: var(--display); line-height: 1.1; margin: 0; text-wrap: balance; }
+  button, input, textarea { font: inherit; }
+  a { color: var(--brand); }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 20px; }
+
+  header.top { background: var(--card); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 5; }
+  header.top .wrap { display: flex; align-items: center; gap: 24px; min-height: 68px; flex-wrap: wrap; padding-block: 8px; }
+  .logo { display: flex; align-items: center; text-decoration: none; }
+  .logo img { height: 56px; width: auto; display: block; }
+  nav { display: flex; gap: 4px; flex: 1; }
+  nav a { padding: 8px 14px; border-radius: 8px; text-decoration: none; color: var(--ink); font-weight: 500; }
+  nav a[aria-current="page"] { background: var(--ink); color: #fff; }
+  nav a:hover:not([aria-current]) { background: var(--paper); }
+  .who { display: flex; align-items: center; gap: 10px; font-size: 14px; }
+
+  .btn { border: 0; border-radius: 8px; padding: 10px 18px; font-weight: 700; cursor: pointer; background: var(--brand); color: #fff; }
+  .btn:hover { filter: brightness(1.1); }
+  .btn.ghost { background: transparent; color: var(--ink); border: 1px solid var(--line); }
+  .btn.sun { background: var(--sun); color: var(--ink); }
+  .row strong, .event h3 { color: var(--ink); }
+  .btn.danger { background: transparent; color: var(--warn); border: 1px solid var(--warn); }
+  .btn.sm { padding: 6px 12px; font-size: 14px; }
+  :focus-visible { outline: 3px solid var(--sun); outline-offset: 2px; }
+
+  .hero { background: linear-gradient(135deg, #0a2e3d 0%, #0e5f78 60%, #188c8c 130%); color: #fff; padding: 56px 0 48px; }
+  .hero h1 { font-size: clamp(36px, 6vw, 60px); font-weight: 800; max-width: 14ch; }
+  .hero p { color: #d3eaed; max-width: 52ch; font-size: 18px; margin: 16px 0 24px; }
+  .hero .sun { color: var(--sun); }
+
+  main { padding-block: 36px 64px; }
+  .section-title { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 18px; gap: 12px; flex-wrap: wrap; }
+  .section-title h2 { font-size: 30px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 18px; }
+
+  .event { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 20px; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+  .event h3 { font-size: 22px; }
+  .event p { margin: 0; color: var(--muted); }
+  .meta { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 14px; color: var(--muted); }
+  .meta span { white-space: nowrap; }
+  .event .foot { margin-top: auto; display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+  .spots { font-size: 14px; font-weight: 700; }
+  .pill { display: inline-block; padding: 3px 10px; border-radius: 99px; font-size: 13px; font-weight: 700; background: var(--line); }
+  .pill.joined { background: #d3eeee; color: #0d5f5f; }
+  .pill.waitlisted { background: #fbe6cf; color: var(--warn); }
+  .pill.past { background: var(--line); color: var(--muted); }
+
+  .panel { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 24px; }
+  .dash-head { text-align: center; padding: 28px 20px; }
+  .dash-head h1 { font-size: 36px; font-weight: 800; }
+  .dash-head p { color: var(--muted); margin: 8px 0 0; }
+  .tabs { display: flex; gap: 8px; margin: 18px 0; flex-wrap: wrap; }
+  .tabs button { flex: 1; min-width: 140px; padding: 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); font-weight: 700; cursor: pointer; }
+  .tabs button[aria-selected="true"] { background: var(--ink); color: #fff; border-color: var(--ink); }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 14px; margin-bottom: 20px; }
+  .stat { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 20px; text-align: center; }
+  .stat b { display: block; font: 800 40px/1 var(--display); font-variant-numeric: tabular-nums; }
+  .stat small { color: var(--muted); font-weight: 500; }
+  .stat.hours { background: var(--ink); color: #fff; border-color: var(--ink); }
+  .stat.hours small { color: #cfe6ea; }
+  .two { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 18px; }
+  .two h2 { font-size: 24px; color: var(--teal); margin-bottom: 14px; }
+  .empty { border: 2px dashed var(--line); border-radius: 10px; padding: 28px; text-align: center; color: var(--muted); }
+  .row { border: 1px solid var(--line); border-radius: 10px; padding: 14px; margin-bottom: 10px; display: flex; flex-direction: column; gap: 6px; }
+  .row .top { display: flex; justify-content: space-between; gap: 10px; align-items: center; }
+  .row strong { font-family: var(--display); font-size: 18px; }
+
+  label { display: block; font-weight: 700; font-size: 14px; margin-bottom: 4px; }
+  input, textarea { width: 100%; padding: 10px 12px; border: 1px solid #c3cbbf; border-radius: 8px; background: #fff; color: var(--ink); }
+  .field { margin-bottom: 14px; }
+  .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0 14px; }
+  .err { color: var(--warn); font-weight: 500; min-height: 1.4em; margin: 6px 0 0; }
+  .hint { color: var(--muted); font-size: 14px; }
+
+  .login { max-width: 440px; margin: 40px auto; }
+  .login h1 { font-size: 34px; margin-bottom: 8px; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+  th { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+  .scroll { overflow-x: auto; }
+  .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--ink); color: #fff; padding: 12px 20px; border-radius: 10px; z-index: 9; }
+  footer { border-top: 1px solid var(--line); padding: 24px 0; color: var(--muted); font-size: 14px; }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="wrap">
+    <a class="logo" href="#/" aria-label="Hands for Humankind home"><img src="/logo.png" alt="Hands for Humankind"></a>
+    <nav id="nav" aria-label="Main"></nav>
+    <div class="who" id="who"></div>
+  </div>
+</header>
+<div id="view"></div>
+<footer><div class="wrap">Hands for Humankind (H4H) · Hours count once an event you joined has ended.</div></footer>
+<div id="toast" class="toast" hidden></div>
+
+<script>
+const $ = (s, r = document) => r.querySelector(s);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const store = {
+  get user() { try { return localStorage.getItem("h4h-user"); } catch { return null; } },
+  set user(v) { try { v ? localStorage.setItem("h4h-user", v) : localStorage.removeItem("h4h-user"); } catch {} },
+  get admin() { try { return sessionStorage.getItem("h4h-admin"); } catch { return null; } },
+  set admin(v) { try { v ? sessionStorage.setItem("h4h-admin", v) : sessionStorage.removeItem("h4h-admin"); } catch {} }
+};
+let me = null; // {username, displayName}
+let dashTab = "overview";
+
+async function api(path, method = "GET", body) {
+  const headers = { "Content-Type": "application/json" };
+  if (store.user) headers["x-username"] = store.user;
+  if (store.admin) headers["x-admin-code"] = store.admin;
+  const r = await fetch("/api" + path, { method, headers, body: body ? JSON.stringify(body) : undefined });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || "Something went wrong.");
+  return data;
+}
+function toast(msg) {
+  const t = $("#toast"); t.textContent = msg; t.hidden = false;
+  clearTimeout(toast.t); toast.t = setTimeout(() => (t.hidden = true), 2600);
+}
+const fmtDate = (d) => new Date(d + "T12:00:00").toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", year: "numeric" });
+const fmtTime = (t) => { const [h, m] = t.split(":").map(Number); return `${((h + 11) % 12) + 1}:${String(m).padStart(2, "0")} ${h < 12 ? "AM" : "PM"}`; };
+const fmtHours = (h) => (Math.round(h * 10) / 10).toFixed(1);
+
+// ---------- chrome ----------
+function renderChrome(route) {
+  const links = [["#/", "Events", "events"], ["#/dashboard", "My Dashboard", "dashboard"], ["#/admin", "Admin", "admin"]];
+  $("#nav").innerHTML = links.map(([h, t, k]) => `<a href="${h}" ${route === k ? 'aria-current="page"' : ""}>${t}</a>`).join("");
+  $("#who").innerHTML = me
+    ? `<span>Hi, <strong>${esc(me.displayName)}</strong></span><button class="btn ghost sm" id="logout">Log out</button>`
+    : `<a class="btn sm" href="#/login" style="text-decoration:none">Log in</a>`;
+  const lo = $("#logout");
+  if (lo) lo.onclick = () => { store.user = null; store.admin = null; me = null; location.hash = "#/"; route_(); };
+}
+
+// ---------- views ----------
+function eventCard(e) {
+  const full = e.taken >= e.capacity;
+  let action;
+  if (e.past) action = `<span class="pill past">Finished</span>`;
+  else if (e.status === "joined") action = `<span class="pill joined">You're in</span><button class="btn ghost sm" data-leave="${e.id}">Cancel</button>`;
+  else if (e.status === "waitlisted") action = `<span class="pill waitlisted">Waitlist #${e.waitlistPosition}</span><button class="btn ghost sm" data-leave="${e.id}">Leave</button>`;
+  else action = `<button class="btn sm ${full ? "sun" : ""}" data-join="${e.id}">${full ? "Join waitlist" : "Sign up"}</button>`;
+  return `<article class="event">
+    <h3>${esc(e.title)}</h3>
+    <p>${esc(e.description)}</p>
+    <div class="meta"><span>📅 ${fmtDate(e.date)}</span><span>🕒 ${fmtTime(e.start)} – ${fmtTime(e.end)}</span><span>⏱ ${fmtHours(e.hours)} hrs</span>${e.location ? `<span>📍 ${esc(e.location)}</span>` : ""}</div>
+    <div class="foot"><span class="spots">${e.taken}/${e.capacity} spots${e.waitlist ? ` · ${e.waitlist} waiting` : ""}</span><span style="display:flex;gap:8px;align-items:center">${action}</span></div>
+  </article>`;
+}
+function bindEventButtons(root, after) {
+  root.querySelectorAll("[data-join]").forEach((b) => (b.onclick = async () => {
+    if (!me) { location.hash = "#/login"; return; }
+    try { await api(`/events/${b.dataset.join}/join`, "POST"); toast("You're signed up."); after(); } catch (e) { toast(e.message); }
+  }));
+  root.querySelectorAll("[data-leave]").forEach((b) => (b.onclick = async () => {
+    try { await api(`/events/${b.dataset.leave}/leave`, "POST"); toast("Removed from event."); after(); } catch (e) { toast(e.message); }
+  }));
+}
+
+async function viewEvents() {
+  renderChrome("events");
+  $("#view").innerHTML = `<section class="hero"><div class="wrap"><h1>Show up. <span class="sun">Help out.</span> Track it.</h1><p>Pick a volunteer event, claim a spot, and watch your hours add up. No password needed, just a username.</p>${me ? "" : `<a class="btn sun" href="#/login" style="text-decoration:none;display:inline-block">Create your account</a>`}</div></section>
+  <main class="wrap"><div class="section-title"><h2>Upcoming events</h2><span class="hint" id="count"></span></div><div class="grid" id="list"></div><div class="section-title" style="margin-top:40px"><h2>Past events</h2></div><div class="grid" id="past"></div></main>`;
+  const load = async () => {
+    const { events } = await api("/events");
+    const up = events.filter((e) => !e.past), past = events.filter((e) => e.past).reverse();
+    $("#count").textContent = `${up.length} open`;
+    $("#list").innerHTML = up.map(eventCard).join("") || `<div class="empty">No events scheduled yet. Check back soon.</div>`;
+    $("#past").innerHTML = past.map(eventCard).join("") || `<div class="empty">Nothing here yet.</div>`;
+    bindEventButtons($("#view"), load);
+  };
+  load();
+}
+
+function viewLogin() {
+  renderChrome("");
+  $("#view").innerHTML = `<main class="wrap"><div class="panel login">
+    <h1>Log in or sign up</h1>
+    <p class="hint">Enter a username. If it's new, we'll create your account. No password.</p>
+    <form id="f" autocomplete="off">
+      <div class="field"><label for="u">Username</label><input id="u" required minlength="3" maxlength="20" placeholder="e.g. saad2027" autocapitalize="none"></div>
+      <div class="field" id="dnWrap"><label for="dn">Display name <span class="hint">(optional, for new accounts)</span></label><input id="dn" maxlength="40" placeholder="Saad"></div>
+      <button class="btn" type="submit">Continue</button>
+      <p class="err" id="err" role="alert"></p>
+    </form>
+    <p class="hint">Remember your username. Anyone who knows it can log in as you.</p></div></main>`;
+  $("#f").onsubmit = async (ev) => {
+    ev.preventDefault();
+    try {
+      const r = await api("/login", "POST", { username: $("#u").value, displayName: $("#dn").value });
+      store.user = r.username; me = r;
+      toast(r.created ? "Account created. Welcome!" : "Welcome back!");
+      location.hash = "#/dashboard";
+    } catch (e) { $("#err").textContent = e.message; }
+  };
+}
+
+async function viewDashboard() {
+  if (!me) return (location.hash = "#/login");
+  renderChrome("dashboard");
+  $("#view").innerHTML = `<main class="wrap"><div class="panel dash-head"><h1>${esc(me.displayName)}'s Dashboard</h1><p>Manage your volunteer activities and profile</p></div>
+    <div class="tabs" role="tablist">
+      <button role="tab" data-t="overview">Overview</button><button role="tab" data-t="activities">My Activities</button><button role="tab" data-t="profile">Update Profile</button>
+    </div><div id="tabBody"></div></main>`;
+  const d = await api("/me");
+  const draw = () => {
+    document.querySelectorAll(".tabs button").forEach((b) => b.setAttribute("aria-selected", b.dataset.t === dashTab));
+    const rows = (list, kind) => list.map((e) => `<div class="row"><div class="top"><strong>${esc(e.title)}</strong><span class="pill ${kind}">${kind === "joined" ? "Joined" : kind === "waitlisted" ? "Waitlist #" + e.waitlistPosition : fmtHours(e.hours) + " hrs"}</span></div>
+      <div class="meta"><span>📅 ${fmtDate(e.date)}</span><span>🕒 ${fmtTime(e.start)} – ${fmtTime(e.end)}</span><span>⏱ ${fmtHours(e.hours)} hrs</span></div>
+      ${e.past ? "" : `<div><button class="btn ghost sm" data-leave="${e.id}">${kind === "joined" ? "Cancel" : "Leave waitlist"}</button></div>`}</div>`).join("");
+    const body = $("#tabBody");
+    if (dashTab === "overview") {
+      body.innerHTML = `<div class="stats">
+        <div class="stat hours"><b>${fmtHours(d.hours)}</b><small>Hours Volunteered</small></div>
+        <div class="stat"><b>${d.joinedCount}</b><small>Opportunities Joined</small></div>
+        <div class="stat"><b>${d.upcoming.length}</b><small>Upcoming Activities</small></div>
+        <div class="stat"><b>${d.waitlisted.length}</b><small>Waitlisted</small></div></div>
+        <div class="two"><div class="panel"><h2>Upcoming Activities</h2>${rows(d.upcoming, "joined") || `<div class="empty">Nothing coming up. <a href="#/">Find an event</a></div>`}</div>
+        <div class="panel"><h2>Recent Completed</h2>${rows(d.completed.slice(0, 5), "done") || `<div class="empty">No completed activities yet</div>`}</div></div>`;
+    } else if (dashTab === "activities") {
+      body.innerHTML = `<div class="panel"><h2 style="font-size:24px;margin-bottom:14px">Upcoming</h2>${rows(d.upcoming, "joined") + rows(d.waitlisted, "waitlisted") || `<div class="empty">No upcoming activities. <a href="#/">Browse events</a></div>`}
+        <h2 style="font-size:24px;margin:24px 0 14px">Completed</h2>${rows(d.completed, "done") || `<div class="empty">No completed activities yet</div>`}</div>`;
+    } else {
+      body.innerHTML = `<div class="panel" style="max-width:520px"><form id="pf"><div class="field"><label>Username</label><input value="${esc(d.username)}" disabled></div>
+        <div class="field"><label for="pn">Display name</label><input id="pn" maxlength="40" value="${esc(d.displayName)}"></div>
+        <p class="hint">Member since ${new Date(d.createdAt).toLocaleDateString()}</p><button class="btn" type="submit">Save</button></form></div>`;
+      $("#pf").onsubmit = async (ev) => { ev.preventDefault(); const r = await api("/me", "PUT", { displayName: $("#pn").value }); me.displayName = r.displayName; renderChrome("dashboard"); $("h1", $("#view")).textContent = `${r.displayName}'s Dashboard`; toast("Profile saved."); };
+    }
+    bindEventButtons(body, () => viewDashboard());
+  };
+  document.querySelectorAll(".tabs button").forEach((b) => (b.onclick = () => { dashTab = b.dataset.t; draw(); }));
+  draw();
+}
+
+async function viewAdmin() {
+  renderChrome("admin");
+  const gate = () => {
+    $("#view").innerHTML = `<main class="wrap"><div class="panel login"><h1>Admin</h1><p class="hint">Officers only. Enter the admin code.</p>
+      <form id="af"><div class="field"><label for="ac">Admin code</label><input id="ac" type="password" required></div><button class="btn" type="submit">Unlock</button><p class="err" id="err" role="alert"></p></form></div></main>`;
+    $("#af").onsubmit = async (ev) => {
+      ev.preventDefault(); store.admin = $("#ac").value;
+      try { await api("/admin/check"); viewAdmin(); } catch (e) { store.admin = null; $("#err").textContent = e.message; }
+    };
+  };
+  if (!store.admin) return gate();
+  try { await api("/admin/check"); } catch { store.admin = null; return gate(); }
+
+  const [{ events }, { volunteers }] = await Promise.all([api("/events"), api("/admin/volunteers")]);
+  $("#view").innerHTML = `<main class="wrap">
+    <div class="section-title"><h2>Admin</h2><button class="btn ghost sm" id="lock">Lock</button></div>
+    <div class="panel" style="margin-bottom:20px"><h3 style="margin-bottom:14px">New event</h3>
+      <form id="nf"><div class="form-grid">
+        <div class="field"><label for="nt">Title</label><input id="nt" required></div>
+        <div class="field"><label for="nl">Location</label><input id="nl"></div>
+        <div class="field"><label for="nd">Date</label><input id="nd" type="date" required></div>
+        <div class="field"><label for="ns">Start</label><input id="ns" type="time" required></div>
+        <div class="field"><label for="ne">End</label><input id="ne" type="time" required></div>
+        <div class="field"><label for="nc">Spots</label><input id="nc" type="number" min="1" value="10" required></div></div>
+      <div class="field"><label for="nx">Description</label><textarea id="nx" rows="2"></textarea></div>
+      <button class="btn" type="submit">Publish event</button><p class="err" id="err" role="alert"></p></form></div>
+    <div class="panel" style="margin-bottom:20px"><h3 style="margin-bottom:14px">Events and rosters</h3><div class="scroll"><table>
+      <thead><tr><th>Event</th><th>Date</th><th>Filled</th><th></th></tr></thead>
+      <tbody>${events.map((e) => `<tr><td>${esc(e.title)}</td><td>${fmtDate(e.date)}</td><td>${e.taken}/${e.capacity}${e.waitlist ? ` (+${e.waitlist})` : ""}</td>
+        <td style="white-space:nowrap"><button class="btn ghost sm" data-roster="${e.id}">Roster</button> <button class="btn danger sm" data-del="${e.id}">Delete</button></td></tr>
+        <tr hidden id="r-${e.id}"><td colspan="4" class="hint"></td></tr>`).join("")}</tbody></table></div></div>
+    <div class="panel"><h3 style="margin-bottom:14px">Volunteer hours</h3><div class="scroll"><table>
+      <thead><tr><th>Username</th><th>Name</th><th>Events</th><th>Hours</th></tr></thead>
+      <tbody>${volunteers.map((v) => `<tr><td>${esc(v.username)}</td><td>${esc(v.name)}</td><td>${v.events}</td><td>${fmtHours(v.hours)}</td></tr>`).join("") || `<tr><td colspan="4" class="hint">No volunteers yet.</td></tr>`}</tbody></table></div></div></main>`;
+  $("#lock").onclick = () => { store.admin = null; viewAdmin(); };
+  $("#nf").onsubmit = async (ev) => {
+    ev.preventDefault();
+    try {
+      await api("/admin/events", "POST", { title: $("#nt").value, location: $("#nl").value, date: $("#nd").value, start: $("#ns").value, end: $("#ne").value, capacity: $("#nc").value, description: $("#nx").value });
+      toast("Event published."); viewAdmin();
+    } catch (e) { $("#err").textContent = e.message; }
+  };
+  document.querySelectorAll("[data-del]").forEach((b) => (b.onclick = async () => {
+    if (b.dataset.sure !== "1") { b.dataset.sure = "1"; b.textContent = "Click again to delete"; return; }
+    await api("/admin/events/" + b.dataset.del, "DELETE"); toast("Event deleted."); viewAdmin();
+  }));
+  document.querySelectorAll("[data-roster]").forEach((b) => (b.onclick = async () => {
+    const row = $("#r-" + b.dataset.roster), cell = row.firstElementChild;
+    if (!row.hidden) { row.hidden = true; return; }
+    const { roster } = await api(`/admin/events/${b.dataset.roster}/roster`);
+    cell.innerHTML = roster.length ? roster.map((r) => `${esc(r.name)} (@${esc(r.username)})${r.status === "waitlisted" ? " · waitlist" : ""}`).join("<br>") : "No sign-ups yet.";
+    row.hidden = false;
+  }));
+}
+
+// ---------- router ----------
+async function route_() {
+  if (store.user && !me) { try { me = await api("/login", "POST", { username: store.user }); } catch { store.user = null; } }
+  const h = location.hash || "#/";
+  if (h === "#/login") return viewLogin();
+  if (h === "#/dashboard") return viewDashboard();
+  if (h === "#/admin") return viewAdmin();
+  return viewEvents();
+}
+window.addEventListener("hashchange", route_);
+route_();
+</script>
+</body>
+</html>
