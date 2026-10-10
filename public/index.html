@@ -95,7 +95,7 @@
   .field { margin-bottom: 14px; }
   .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0 14px; }
   .err { color: var(--warn); font-weight: 500; min-height: 1.4em; margin: 6px 0 0; }
-  .hint { color: var(--muted); font-size: 14px; }
+  .hint { color: var(--muted); font-size: 14px; overflow-wrap: anywhere; }
 
   .login { max-width: 440px; margin: 40px auto; }
   .login h1 { font-size: 34px; margin-bottom: 8px; }
@@ -131,7 +131,7 @@ const store = {
   get admin() { try { return sessionStorage.getItem("h4h-admin"); } catch { return null; } },
   set admin(v) { try { v ? sessionStorage.setItem("h4h-admin", v) : sessionStorage.removeItem("h4h-admin"); } catch {} }
 };
-let me = null; // {username, displayName}
+let me = null; // {email, displayName}
 let dashTab = "overview";
 
 async function api(path, method = "GET", body) {
@@ -189,7 +189,7 @@ function bindEventButtons(root, after) {
 
 async function viewEvents() {
   renderChrome("events");
-  $("#view").innerHTML = `<section class="hero"><div class="wrap"><h1>Show up. <span class="sun">Help out.</span> Track it.</h1><p>Pick a volunteer event, claim a spot, and watch your hours add up. No password needed, just a username.</p>${me ? "" : `<a class="btn sun" href="#/login" style="text-decoration:none;display:inline-block">Create your account</a>`}</div></section>
+  $("#view").innerHTML = `<section class="hero"><div class="wrap"><h1>Show up. <span class="sun">Help out.</span> Track it.</h1><p>Pick a volunteer event, claim a spot, and watch your hours add up. No password needed, just your email.</p>${me ? "" : `<a class="btn sun" href="#/login" style="text-decoration:none;display:inline-block">Create your account</a>`}</div></section>
   <main class="wrap"><div class="section-title"><h2>Upcoming events</h2><span class="hint" id="count"></span></div><div class="grid" id="list"></div><div class="section-title" style="margin-top:40px"><h2>Past events</h2></div><div class="grid" id="past"></div></main>`;
   const load = async () => {
     const { events } = await api("/events");
@@ -206,19 +206,19 @@ function viewLogin() {
   renderChrome("");
   $("#view").innerHTML = `<main class="wrap"><div class="panel login">
     <h1>Log in or sign up</h1>
-    <p class="hint">Enter a username. If it's new, we'll create your account. No password.</p>
-    <form id="f" autocomplete="off">
-      <div class="field"><label for="u">Username</label><input id="u" required minlength="3" maxlength="20" placeholder="e.g. saad2027" autocapitalize="none"></div>
-      <div class="field" id="dnWrap"><label for="dn">Display name <span class="hint">(optional, for new accounts)</span></label><input id="dn" maxlength="40" placeholder="Saad"></div>
+    <p class="hint">Enter your email and name. If you're new, we'll create your account. No password.</p>
+    <form id="f" autocomplete="on">
+      <div class="field"><label for="u">Email</label><input id="u" type="text" inputmode="email" autocomplete="email" required maxlength="254" placeholder="you@example.com" autocapitalize="none" spellcheck="false"></div>
+      <div class="field" id="dnWrap"><label for="dn">Name <span class="hint">(needed the first time)</span></label><input id="dn" maxlength="40" autocomplete="name" placeholder="First and last name"></div>
       <button class="btn" type="submit">Continue</button>
       <p class="err" id="err" role="alert"></p>
     </form>
-    <p class="hint">Remember your username. Anyone who knows it can log in as you.</p></div></main>`;
+    <p class="hint">Use the same email every time so your hours stay together. Only officers can see it. There is no password, so anyone who types your email can log in as you.</p></div></main>`;
   $("#f").onsubmit = async (ev) => {
     ev.preventDefault();
     try {
-      const r = await api("/login", "POST", { username: $("#u").value, displayName: $("#dn").value });
-      store.user = r.username; me = r;
+      const r = await api("/login", "POST", { email: $("#u").value, displayName: $("#dn").value });
+      store.user = r.email; me = r;
       toast(r.created ? "Account created. Welcome!" : "Welcome back!");
       location.hash = "#/dashboard";
     } catch (e) { $("#err").textContent = e.message; }
@@ -252,7 +252,7 @@ async function viewDashboard() {
         <h2 style="font-size:24px;margin:24px 0 14px">Completed</h2>${rows(d.completed, "done") || `<div class="empty">No completed activities yet</div>`}
         ${d.adjustments.length ? `<h2 style="font-size:24px;margin:24px 0 14px">Extra hours</h2>${d.adjustments.map((a) => `<div class="row"><div class="top"><strong>${a.hours > 0 ? "+" : ""}${fmtHours(a.hours)} hrs</strong><span class="hint">${esc(a.date)}</span></div><div>${esc(a.note)}</div></div>`).join("")}` : ""}</div>`;
     } else {
-      body.innerHTML = `<div class="panel" style="max-width:520px"><form id="pf"><div class="field"><label>Username</label><input value="${esc(d.username)}" disabled></div>
+      body.innerHTML = `<div class="panel" style="max-width:520px"><form id="pf"><div class="field"><label>Email</label><input value="${esc(d.email)}" disabled></div>
         <div class="field"><label for="pn">Display name</label><input id="pn" maxlength="40" value="${esc(d.displayName)}"></div>
         <p class="hint">Member since ${new Date(d.createdAt).toLocaleDateString()}</p><button class="btn" type="submit">Save</button></form></div>`;
       $("#pf").onsubmit = async (ev) => { ev.preventDefault(); const r = await api("/me", "PUT", { displayName: $("#pn").value }); me.displayName = r.displayName; renderChrome("dashboard"); $("h1", $("#view")).textContent = `${r.displayName}'s Dashboard`; toast("Profile saved."); };
@@ -309,7 +309,7 @@ async function drawReview(body, redraw) {
         <div class="section-title" style="margin-bottom:10px"><div><h3 style="font-size:22px">${esc(e.title)}</h3><span class="hint">${fmtDate(e.date)} · ${fmtTime(e.start)} – ${fmtTime(e.end)} · ${fmtHours(e.hours)} hrs</span></div>
         ${pend ? `<button class="btn sm" data-all="${esc(e.id)}">Approve all ${pend} pending</button>` : `<span class="pill joined">All reviewed</span>`}</div>
         <div class="scroll"><table><thead><tr><th>Volunteer</th><th>Status</th><th>Hours</th><th></th></tr></thead><tbody>
-        ${e.people.map((p) => `<tr data-u="${esc(p.username)}"><td>${esc(p.name)}<br><span class="hint">@${esc(p.username)}</span></td><td>${approvalPill(p.approval, p.credited)}</td>
+        ${e.people.map((p) => `<tr data-u="${esc(p.email)}"><td>${esc(p.name)}<br><span class="hint">${esc(p.email)}</span></td><td>${approvalPill(p.approval, p.credited)}</td>
           <td><input type="number" class="hrs" min="0" max="24" step="0.25" value="${p.approval === "approved" ? p.credited : e.hours}" aria-label="Hours for ${esc(p.name)}" style="width:90px"></td>
           <td style="white-space:nowrap"><button class="btn sm" data-act="approved">Approve</button> <button class="btn ghost sm" data-act="absent">Absent</button> ${p.approval !== "pending" ? `<button class="btn ghost sm" data-act="pending">Undo</button>` : ""}</td></tr>`).join("")}
         </tbody></table></div></section>`;
@@ -317,7 +317,7 @@ async function drawReview(body, redraw) {
   body.querySelectorAll("[data-all]").forEach((b) => (b.onclick = async () => { const r = await api(`/admin/events/${b.dataset.all}/approve-all`, "POST"); toast(`Approved ${r.approved}.`); redraw(); }));
   body.querySelectorAll("tr[data-u] [data-act]").forEach((b) => (b.onclick = async () => {
     const tr = b.closest("tr"), ev = b.closest("[data-ev]").dataset.ev;
-    try { await api(`/admin/events/${ev}/attendance`, "POST", { username: tr.dataset.u, status: b.dataset.act, hours: $(".hrs", tr).value }); redraw(); }
+    try { await api(`/admin/events/${ev}/attendance`, "POST", { email: tr.dataset.u, status: b.dataset.act, hours: $(".hrs", tr).value }); redraw(); }
     catch (e) { toast(e.message); }
   }));
 }
@@ -326,13 +326,13 @@ async function drawVolunteers(body, redraw) {
   const { volunteers } = await api("/admin/volunteers");
   body.innerHTML = `<div class="panel">
     <div class="section-title" style="margin-bottom:12px"><h3 style="font-size:22px">${volunteers.length} volunteer${volunteers.length === 1 ? "" : "s"}</h3>
-      <div style="display:flex;gap:8px;flex-wrap:wrap"><input id="vq" placeholder="Search name or username" aria-label="Search volunteers" style="width:220px"><button class="btn ghost" id="csv">Export CSV</button></div></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap"><input id="vq" placeholder="Search name or email" aria-label="Search volunteers" style="width:220px"><button class="btn ghost" id="csv">Export CSV</button></div></div>
     <div class="scroll"><table><thead><tr><th>Volunteer</th><th>Events</th><th>Approved hrs</th><th>Pending hrs</th><th></th></tr></thead><tbody id="vrows"></tbody></table></div></div>
     <div id="vdetail" style="margin-top:16px"></div>`;
   const rows = () => {
     const q = $("#vq").value.trim().toLowerCase();
-    $("#vrows").innerHTML = volunteers.filter((v) => !q || v.name.toLowerCase().includes(q) || v.username.includes(q)).map((v) =>
-      `<tr><td>${esc(v.name)}<br><span class="hint">@${esc(v.username)}</span></td><td>${v.events}</td><td><strong>${fmtHours(v.hours)}</strong></td><td>${v.pendingHours ? fmtHours(v.pendingHours) : "–"}</td><td><button class="btn ghost sm" data-m="${esc(v.username)}">Manage</button></td></tr>`).join("") || `<tr><td colspan="5" class="hint">No volunteers match.</td></tr>`;
+    $("#vrows").innerHTML = volunteers.filter((v) => !q || v.name.toLowerCase().includes(q) || v.email.includes(q)).map((v) =>
+      `<tr><td>${esc(v.name)}<br><span class="hint">${esc(v.email)}</span></td><td>${v.events}</td><td><strong>${fmtHours(v.hours)}</strong></td><td>${v.pendingHours ? fmtHours(v.pendingHours) : "–"}</td><td><button class="btn ghost sm" data-m="${esc(v.email)}">Manage</button></td></tr>`).join("") || `<tr><td colspan="5" class="hint">No volunteers match.</td></tr>`;
     $("#vrows").querySelectorAll("[data-m]").forEach((b) => (b.onclick = () => detail(b.dataset.m)));
   };
   $("#vq").oninput = rows; rows();
@@ -343,7 +343,7 @@ async function drawVolunteers(body, redraw) {
   };
   async function detail(u) {
     const d = await api("/admin/volunteers/" + encodeURIComponent(u));
-    $("#vdetail").innerHTML = `<div class="panel"><div class="section-title"><h3 style="font-size:22px">${esc(d.name)} <span class="hint">@${esc(d.username)}</span></h3><span class="pill joined">${fmtHours(d.hours)} hrs approved</span></div>
+    $("#vdetail").innerHTML = `<div class="panel"><div class="section-title"><h3 style="font-size:22px">${esc(d.name)} <span class="hint">${esc(d.email)}</span></h3><span class="pill joined">${fmtHours(d.hours)} hrs approved</span></div>
       <h4 style="margin:14px 0 8px">Events</h4>
       ${[...d.completed, ...d.upcoming, ...d.waitlisted].map((e) => `<div class="row"><div class="top"><strong>${esc(e.title)}</strong>${e.past ? approvalPill(e.approval, e.credited) : e.status === "joined" ? `<span class="pill joined">Upcoming</span>` : `<span class="pill waitlisted">Waitlist</span>`}</div><div class="meta"><span>📅 ${fmtDate(e.date)}</span><span>⏱ ${fmtHours(e.hours)} hrs</span></div></div>`).join("") || `<div class="empty">No events yet.</div>`}
       <h4 style="margin:18px 0 8px">Extra hours</h4>
@@ -353,7 +353,7 @@ async function drawVolunteers(body, redraw) {
         <div class="field"><button class="btn" type="submit">Add hours</button></div></form><p class="err" id="aerr" role="alert"></p>
       <hr style="border:0;border-top:1px solid var(--line);margin:16px 0"><button class="btn danger sm" id="rmv">Remove volunteer</button> <span class="hint">Deletes the account, sign-ups and hours.</span></div>`;
     $("#vdetail").scrollIntoView({ behavior: "smooth", block: "nearest" });
-    $("#adj").onsubmit = async (ev) => { ev.preventDefault(); try { await api("/admin/adjustments", "POST", { username: u, hours: $("#ah").value, note: $("#an").value }); toast("Hours added."); redraw(); } catch (e) { $("#aerr").textContent = e.message; } };
+    $("#adj").onsubmit = async (ev) => { ev.preventDefault(); try { await api("/admin/adjustments", "POST", { email: u, hours: $("#ah").value, note: $("#an").value }); toast("Hours added."); redraw(); } catch (e) { $("#aerr").textContent = e.message; } };
     $("#vdetail").querySelectorAll("[data-rm]").forEach((b) => (b.onclick = async () => { await api("/admin/adjustments/" + b.dataset.rm, "DELETE"); toast("Removed."); redraw(); }));
     $("#rmv").onclick = async (ev) => {
       if (ev.target.dataset.sure !== "1") { ev.target.dataset.sure = "1"; ev.target.textContent = "Click again to confirm"; return; }
@@ -394,14 +394,14 @@ async function drawEvents(body, redraw) {
     const row = $("#r-" + b.dataset.roster), cell = row.firstElementChild;
     if (!row.hidden) { row.hidden = true; return; }
     const { roster } = await api(`/admin/events/${b.dataset.roster}/roster`);
-    cell.innerHTML = roster.length ? roster.map((r) => `${esc(r.name)} (@${esc(r.username)})${r.status === "waitlisted" ? " · waitlist" : ""}`).join("<br>") : "No sign-ups yet.";
+    cell.innerHTML = roster.length ? roster.map((r) => `${esc(r.name)} (${esc(r.email)})${r.status === "waitlisted" ? " · waitlist" : ""}`).join("<br>") : "No sign-ups yet.";
     row.hidden = false;
   }));
 }
 
 // ---------- router ----------
 async function route_() {
-  if (store.user && !me) { try { me = await api("/login", "POST", { username: store.user }); } catch { store.user = null; } }
+  if (store.user && !me) { try { me = await api("/login", "POST", { email: store.user }); } catch { store.user = null; } }
   const h = location.hash || "#/";
   if (h === "#/login") return viewLogin();
   if (h === "#/dashboard") return viewDashboard();
