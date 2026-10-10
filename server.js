@@ -80,7 +80,9 @@ const ts = (d, t) => new Date(`${d}T${t}:00`).getTime();
 const hoursOf = (e) => Math.max(0, (ts(e.date, e.end) - ts(e.date, e.start)) / 36e5);
 const isPast = (e) => ts(e.date, e.end) < Date.now();
 const cleanName = (s) => String(s || "").trim().toLowerCase();
-const validName = (s) => /^[a-z0-9_.-]{3,20}$/.test(s);
+const validEmail = (s) => s.length <= 254 && /^[^\s@<>"']+@[^\s@<>"']+\.[^\s@<>"']{2,}$/.test(s);
+const hasUser = (db, k) => Object.prototype.hasOwnProperty.call(db.users, k);
+const dec = (x) => { try { return decodeURIComponent(x); } catch { return x; } };
 const round2 = (n) => Math.round(n * 100) / 100;
 
 const statusFor = (e, u) => { const i = e.signups.indexOf(u); return i === -1 ? null : i < e.capacity ? "joined" : "waitlisted"; };
@@ -116,7 +118,11 @@ function stats(db, user) {
     joinedCount: joined.length, upcoming, completed, waitlisted, adjustments
   };
 }
-const csvCell = (v) => { const s = String(v ?? ""); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+const csvCell = (v) => {
+  let s = String(v ?? "");
+  if (typeof v === "string" && /^[=+\-@\t\r]/.test(s)) s = "'" + s; // keep spreadsheets from running names/emails as formulas
+  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+};
 
 // ---------- http ----------
 function send(res, code, body, type = "application/json") {
@@ -139,18 +145,23 @@ const server = http.createServer(async (req, res) => {
   if (p.startsWith("/api/")) {
     const db = load();
     const user = cleanName(req.headers["x-username"]);
-    const known = user && db.users[user] ? user : null;
+    const known = user && hasUser(db, user) ? user : null;
     const isAdmin = req.headers["x-admin-code"] === ADMIN_CODE;
     const body = req.method === "GET" ? {} : await readBody(req);
     let m;
 
-    // login or create account (username only)
+    // log in, or create an account (email + name, no password)
     if (p === "/api/login" && req.method === "POST") {
-      const name = cleanName(body.username);
-      if (!validName(name)) return send(res, 400, { error: "Usernames are 3 to 20 characters: letters, numbers, . _ -" });
-      let created = false;
-      if (!db.users[name]) { db.users[name] = { displayName: String(body.displayName || "").trim().slice(0, 40) || name, createdAt: Date.now() }; created = true; save(db); }
-      return send(res, 200, { username: name, displayName: db.users[name].displayName, created });
+      const key = cleanName(body.email || body.username);
+      if (hasUser(db, key)) { // existing account, including older username accounts
+        return send(res, 200, { email: key, displayName: db.users[key].displayName, created: false });
+      }
+      const displayName = String(body.displayName || "").trim().slice(0, 40);
+      if (!validEmail(key)) return send(res, 400, { error: "Enter a valid email address, like name@example.com." });
+      if (!displayName) return send(res, 400, { error: "Enter your name to create your account." });
+      db.users[key] = { displayName, createdAt: Date.now() };
+      save(db);
+      return send(res, 200, { email: key, displayName, created: true });
     }
 
     if (p === "/api/events" && req.method === "GET") {
@@ -180,7 +191,7 @@ const server = http.createServer(async (req, res) => {
         db.users[known].displayName = String(body.displayName || "").trim().slice(0, 40) || known;
         save(db);
       }
-      return send(res, 200, { username: known, displayName: db.users[known].displayName, createdAt: db.users[known].createdAt, ...stats(db, known) });
+      return send(res, 200, { email: known, displayName: db.users[known].displayName, createdAt: db.users[known].createdAt, ...stats(db, known) });
     }
 
     // ----- admin -----
@@ -210,14 +221,14 @@ const server = http.createServer(async (req, res) => {
       if (m && req.method === "GET") {
         const e = db.events.find((x) => x.id === m[1]);
         if (!e) return send(res, 404, { error: "Event not found." });
-        return send(res, 200, { roster: e.signups.map((u, i) => ({ username: u, name: nameOf(u), status: i < e.capacity ? "joined" : "waitlisted" })) });
+        return send(res, 200, { roster: e.signups.map((u, i) => ({ email: u, name: nameOf(u), status: i < e.capacity ? "joined" : "waitlisted" })) });
       }
 
       // hours review: finished events, one row per joined volunteer
       if (p === "/api/admin/review" && req.method === "GET") {
         const events = db.events.filter(isPast).sort((a, b) => (b.date + b.end).localeCompare(a.date + a.end)).map((e) => ({
           id: e.id, title: e.title, date: e.date, start: e.start, end: e.end, hours: hoursOf(e),
-          people: e.signups.slice(0, e.capacity).map((u) => ({ username: u, name: nameOf(u), approval: approvalOf(e, u), credited: creditOf(e, u) }))
+          people: e.signups.slice(0, e.capacity).map((u) => ({ email: u, name: nameOf(u), approval: approvalOf(e, u), credited: creditOf(e, u) }))
         })).filter((e) => e.people.length);
         const pending = events.reduce((s, e) => s + e.people.filter((x) => x.approval === "pending").length, 0);
         return send(res, 200, { events, pending });
@@ -226,7 +237,7 @@ const server = http.createServer(async (req, res) => {
       if (m && req.method === "POST") {
         const e = db.events.find((x) => x.id === m[1]);
         if (!e) return send(res, 404, { error: "Event not found." });
-        const u = cleanName(body.username);
+        const u = cleanName(body.email || body.username);
         if (!e.signups.slice(0, e.capacity).includes(u)) return send(res, 400, { error: "That person isn't on this event's roster." });
         e.attendance ||= {};
         if (body.status === "pending") delete e.attendance[u];
@@ -254,18 +265,18 @@ const server = http.createServer(async (req, res) => {
       if (p === "/api/admin/volunteers" && req.method === "GET") {
         const rows = Object.keys(db.users).map((u) => {
           const s = stats(db, u);
-          return { username: u, name: nameOf(u), createdAt: db.users[u].createdAt, hours: s.hours, pendingHours: s.pendingHours, events: s.joinedCount };
+          return { email: u, name: nameOf(u), createdAt: db.users[u].createdAt, hours: s.hours, pendingHours: s.pendingHours, events: s.joinedCount };
         }).sort((a, b) => b.hours - a.hours);
         return send(res, 200, { volunteers: rows });
       }
-      m = p.match(/^\/api\/admin\/volunteers\/([\w.-]+)$/);
+      m = p.match(/^\/api\/admin\/volunteers\/([^/]+)$/);
       if (m && req.method === "GET") {
-        const u = cleanName(m[1]);
-        if (!db.users[u]) return send(res, 404, { error: "Volunteer not found." });
-        return send(res, 200, { username: u, name: nameOf(u), ...stats(db, u) });
+        const u = cleanName(dec(m[1]));
+        if (!hasUser(db, u)) return send(res, 404, { error: "Volunteer not found." });
+        return send(res, 200, { email: u, name: nameOf(u), ...stats(db, u) });
       }
       if (m && req.method === "DELETE") {
-        const u = cleanName(m[1]);
+        const u = cleanName(dec(m[1]));
         delete db.users[u];
         db.events.forEach((e) => { e.signups = e.signups.filter((x) => x !== u); if (e.attendance) delete e.attendance[u]; });
         db.adjustments = db.adjustments.filter((a) => a.username !== u);
@@ -275,8 +286,8 @@ const server = http.createServer(async (req, res) => {
 
       // manual hour entries (+ or -), e.g. work done outside a listed event
       if (p === "/api/admin/adjustments" && req.method === "POST") {
-        const u = cleanName(body.username), h = Number(body.hours), note = String(body.note || "").trim().slice(0, 120);
-        if (!db.users[u]) return send(res, 404, { error: "Volunteer not found." });
+        const u = cleanName(body.email || body.username), h = Number(body.hours), note = String(body.note || "").trim().slice(0, 120);
+        if (!hasUser(db, u)) return send(res, 404, { error: "Volunteer not found." });
         if (!isFinite(h) || h === 0 || Math.abs(h) > 100) return send(res, 400, { error: "Enter hours between -100 and 100 (not 0)." });
         if (!note) return send(res, 400, { error: "Add a short note, like what the hours were for." });
         db.adjustments.push({ id: "a" + Date.now().toString(36), username: u, hours: round2(h), note, date: new Date().toISOString().slice(0, 10) });
@@ -291,8 +302,8 @@ const server = http.createServer(async (req, res) => {
 
       // CSV export
       if (p === "/api/admin/export" && req.method === "GET") {
-        const lines = [["username", "name", "events_joined", "approved_hours", "pending_hours"].join(",")];
-        Object.keys(db.users).forEach((u) => { const s = stats(db, u); lines.push([u, nameOf(u), s.joinedCount, s.hours, s.pendingHours].map(csvCell).join(",")); });
+        const lines = [["name", "email", "events_joined", "approved_hours", "pending_hours"].join(",")];
+        Object.keys(db.users).forEach((u) => { const s = stats(db, u); lines.push([nameOf(u), u, s.joinedCount, s.hours, s.pendingHours].map(csvCell).join(",")); });
         return send(res, 200, lines.join("\n"), "text/csv");
       }
     }
