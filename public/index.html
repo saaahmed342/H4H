@@ -69,6 +69,10 @@
   .pill.joined { background: #d3eeee; color: #0d5f5f; }
   .pill.waitlisted { background: #fbe6cf; color: var(--warn); }
   .pill.past { background: var(--line); color: var(--muted); }
+  .pill.canceled { background: #f6d9d6; color: #9b2c22; }
+  .event.canceled h3, .event.canceled p { text-decoration: line-through; text-decoration-thickness: 1px; opacity: .65; }
+  .event.canceled .meta { opacity: .65; }
+  .row.canceled strong { text-decoration: line-through; opacity: .7; }
 
   .panel { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 24px; }
   .dash-head { text-align: center; padding: 28px 20px; }
@@ -166,11 +170,12 @@ function renderChrome(route) {
 function eventCard(e) {
   const full = e.taken >= e.capacity;
   let action;
-  if (e.past) action = `<span class="pill past">Finished</span>`;
+  if (e.canceled) action = `<span class="pill canceled">Canceled</span>`;
+  else if (e.past) action = `<span class="pill past">Finished</span>`;
   else if (e.status === "joined") action = `<span class="pill joined">You're in</span><button class="btn ghost sm" data-leave="${e.id}">Cancel</button>`;
   else if (e.status === "waitlisted") action = `<span class="pill waitlisted">Waitlist #${e.waitlistPosition}</span><button class="btn ghost sm" data-leave="${e.id}">Leave</button>`;
   else action = `<button class="btn sm ${full ? "sun" : ""}" data-join="${e.id}">${full ? "Join waitlist" : "Sign up"}</button>`;
-  return `<article class="event">
+  return `<article class="event${e.canceled ? " canceled" : ""}">
     <h3>${esc(e.title)}</h3>
     <p>${esc(e.description)}</p>
     <div class="meta"><span>📅 ${fmtDate(e.date)}</span><span>🕒 ${fmtTime(e.start)} – ${fmtTime(e.end)}</span><span>⏱ ${fmtHours(e.hours)} hrs</span>${e.location ? `<span>📍 ${esc(e.location)}</span>` : ""}</div>
@@ -238,6 +243,8 @@ async function viewDashboard() {
     const rows = (list, kind) => list.map((e) => `<div class="row"><div class="top"><strong>${esc(e.title)}</strong><span class="pill ${kind === "done" ? (e.approval === "approved" ? "joined" : e.approval === "absent" ? "past" : "waitlisted") : kind}">${kind === "joined" ? "Joined" : kind === "waitlisted" ? "Waitlist #" + e.waitlistPosition : e.approval === "approved" ? fmtHours(e.credited) + " hrs" : e.approval === "absent" ? "Not credited" : "Pending approval"}</span></div>
       <div class="meta"><span>📅 ${fmtDate(e.date)}</span><span>🕒 ${fmtTime(e.start)} – ${fmtTime(e.end)}</span><span>⏱ ${fmtHours(e.hours)} hrs</span></div>
       ${e.past ? "" : `<div><button class="btn ghost sm" data-leave="${e.id}">${kind === "joined" ? "Cancel" : "Leave waitlist"}</button></div>`}</div>`).join("");
+    const canceledRows = (list) => list.map((e) => `<div class="row canceled"><div class="top"><strong>${esc(e.title)}</strong><span class="pill canceled">Canceled</span></div>
+      <div class="meta"><span>📅 ${fmtDate(e.date)}</span><span>🕒 ${fmtTime(e.start)} – ${fmtTime(e.end)}</span></div></div>`).join("");
     const body = $("#tabBody");
     if (dashTab === "overview") {
       body.innerHTML = `<div class="stats">
@@ -245,10 +252,10 @@ async function viewDashboard() {
         <div class="stat"><b>${d.joinedCount}</b><small>Opportunities Joined</small></div>
         <div class="stat"><b>${d.upcoming.length}</b><small>Upcoming Activities</small></div>
         <div class="stat"><b>${d.waitlisted.length}</b><small>Waitlisted</small></div></div>
-        <div class="two"><div class="panel"><h2>Upcoming Activities</h2>${rows(d.upcoming, "joined") || `<div class="empty">Nothing coming up. <a href="#/">Find an event</a></div>`}</div>
+        <div class="two"><div class="panel"><h2>Upcoming Activities</h2>${canceledRows(d.canceled)}${rows(d.upcoming, "joined") || (d.canceled.length ? "" : `<div class="empty">Nothing coming up. <a href="#/">Find an event</a></div>`)}</div>
         <div class="panel"><h2>Recent Completed</h2>${rows(d.completed.slice(0, 5), "done") || `<div class="empty">No completed activities yet</div>`}</div></div>`;
     } else if (dashTab === "activities") {
-      body.innerHTML = `<div class="panel"><h2 style="font-size:24px;margin-bottom:14px">Upcoming</h2>${rows(d.upcoming, "joined") + rows(d.waitlisted, "waitlisted") || `<div class="empty">No upcoming activities. <a href="#/">Browse events</a></div>`}
+      body.innerHTML = `<div class="panel"><h2 style="font-size:24px;margin-bottom:14px">Upcoming</h2>${canceledRows(d.canceled) + rows(d.upcoming, "joined") + rows(d.waitlisted, "waitlisted") || `<div class="empty">No upcoming activities. <a href="#/">Browse events</a></div>`}
         <h2 style="font-size:24px;margin:24px 0 14px">Completed</h2>${rows(d.completed, "done") || `<div class="empty">No completed activities yet</div>`}
         ${d.adjustments.length ? `<h2 style="font-size:24px;margin:24px 0 14px">Extra hours</h2>${d.adjustments.map((a) => `<div class="row"><div class="top"><strong>${a.hours > 0 ? "+" : ""}${fmtHours(a.hours)} hrs</strong><span class="hint">${esc(a.date)}</span></div><div>${esc(a.note)}</div></div>`).join("")}` : ""}</div>`;
     } else {
@@ -364,7 +371,8 @@ async function drawVolunteers(body, redraw) {
 
 async function drawEvents(body, redraw) {
   const { events } = await api("/events");
-  body.innerHTML = `<div class="panel" style="margin-bottom:20px"><h3 style="margin-bottom:14px">New event</h3>
+  let editing = null; // id of the event being edited, or null when creating
+  body.innerHTML = `<div class="panel" style="margin-bottom:20px"><h3 style="margin-bottom:14px" id="fh">New event</h3>
       <form id="nf"><div class="form-grid">
         <div class="field"><label for="nt">Title</label><input id="nt" required></div>
         <div class="field"><label for="nl">Location</label><input id="nl"></div>
@@ -373,19 +381,45 @@ async function drawEvents(body, redraw) {
         <div class="field"><label for="ne">End</label><input id="ne" type="time" required></div>
         <div class="field"><label for="nc">Spots</label><input id="nc" type="number" min="1" value="10" required></div></div>
       <div class="field"><label for="nx">Description</label><textarea id="nx" rows="2"></textarea></div>
-      <button class="btn" type="submit">Publish event</button><p class="err" id="err" role="alert"></p></form></div>
+      <button class="btn" type="submit" id="fsave">Publish event</button> <button class="btn ghost" type="button" id="fcancel" hidden>Stop editing</button><p class="err" id="err" role="alert"></p></form></div>
     <div class="panel"><h3 style="margin-bottom:14px">All events</h3><div class="scroll"><table>
       <thead><tr><th>Event</th><th>Date</th><th>Filled</th><th></th></tr></thead>
-      <tbody>${events.map((e) => `<tr><td>${esc(e.title)}</td><td>${fmtDate(e.date)}</td><td>${e.taken}/${e.capacity}${e.waitlist ? ` (+${e.waitlist})` : ""}</td>
-        <td style="white-space:nowrap"><button class="btn ghost sm" data-roster="${e.id}">Roster</button> <button class="btn danger sm" data-del="${e.id}">Delete</button></td></tr>
-        <tr hidden id="r-${e.id}"><td colspan="4" class="hint"></td></tr>`).join("")}</tbody></table></div></div>`;
+      <tbody>${events.map((e) => `<tr><td>${esc(e.title)}${e.canceled ? ` <span class="pill canceled">Canceled</span>` : ""}</td><td>${fmtDate(e.date)}</td><td>${e.taken}/${e.capacity}${e.waitlist ? ` (+${e.waitlist})` : ""}</td>
+        <td style="white-space:nowrap"><button class="btn ghost sm" data-edit="${e.id}">Edit</button> <button class="btn ghost sm" data-roster="${e.id}">Roster</button> ${e.canceled
+          ? `<button class="btn ghost sm" data-restore="${e.id}">Restore</button>`
+          : e.past ? "" : `<button class="btn ghost sm" data-cancel="${e.id}">Cancel event</button>`} <button class="btn danger sm" data-del="${e.id}">Delete</button></td></tr>
+        <tr hidden id="r-${e.id}"><td colspan="4" class="hint"></td></tr>`).join("")}</tbody></table></div>
+      <p class="hint" style="margin-top:12px">Cancel keeps the sign-ups and shows the event as canceled; Restore brings it back. Delete removes it for good.</p></div>`;
+
+  const setForm = (e) => {
+    editing = e ? e.id : null;
+    $("#nt").value = e ? e.title : ""; $("#nl").value = e ? e.location : ""; $("#nd").value = e ? e.date : "";
+    $("#ns").value = e ? e.start : ""; $("#ne").value = e ? e.end : ""; $("#nc").value = e ? e.capacity : 10; $("#nx").value = e ? e.description : "";
+    $("#fh").textContent = e ? "Edit event" : "New event";
+    $("#fsave").textContent = e ? "Save changes" : "Publish event";
+    $("#fcancel").hidden = !e; $("#err").textContent = "";
+  };
+  $("#fcancel").onclick = () => setForm(null);
   $("#nf").onsubmit = async (ev) => {
     ev.preventDefault();
+    const data = { title: $("#nt").value, location: $("#nl").value, date: $("#nd").value, start: $("#ns").value, end: $("#ne").value, capacity: $("#nc").value, description: $("#nx").value };
     try {
-      await api("/admin/events", "POST", { title: $("#nt").value, location: $("#nl").value, date: $("#nd").value, start: $("#ns").value, end: $("#ne").value, capacity: $("#nc").value, description: $("#nx").value });
-      toast("Event published."); redraw();
+      if (editing) { await api("/admin/events/" + editing, "PUT", data); toast("Event updated."); }
+      else { await api("/admin/events", "POST", data); toast("Event published."); }
+      redraw();
     } catch (e) { $("#err").textContent = e.message; }
   };
+  body.querySelectorAll("[data-edit]").forEach((b) => (b.onclick = () => {
+    setForm(events.find((x) => x.id === b.dataset.edit));
+    $("#nf").scrollIntoView({ behavior: "smooth", block: "center" }); $("#nt").focus();
+  }));
+  body.querySelectorAll("[data-cancel]").forEach((b) => (b.onclick = async () => {
+    if (b.dataset.sure !== "1") { b.dataset.sure = "1"; b.textContent = "Click again to cancel"; return; }
+    try { await api(`/admin/events/${b.dataset.cancel}/cancel`, "POST", { canceled: true }); toast("Event canceled."); redraw(); } catch (e) { toast(e.message); }
+  }));
+  body.querySelectorAll("[data-restore]").forEach((b) => (b.onclick = async () => {
+    try { await api(`/admin/events/${b.dataset.restore}/cancel`, "POST", { canceled: false }); toast("Event restored."); redraw(); } catch (e) { toast(e.message); }
+  }));
   body.querySelectorAll("[data-del]").forEach((b) => (b.onclick = async () => {
     if (b.dataset.sure !== "1") { b.dataset.sure = "1"; b.textContent = "Click again to delete"; return; }
     await api("/admin/events/" + b.dataset.del, "DELETE"); toast("Event deleted."); redraw();
