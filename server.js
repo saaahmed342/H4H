@@ -99,23 +99,24 @@ function publicEvent(e, user) {
     date: e.date, start: e.start, end: e.end, hours: hoursOf(e), capacity: e.capacity,
     taken: Math.min(e.signups.length, e.capacity),
     waitlist: Math.max(0, e.signups.length - e.capacity),
-    past: isPast(e), status: user ? statusFor(e, user) : null,
+    past: isPast(e), canceled: !!e.canceled, status: user ? statusFor(e, user) : null,
     waitlistPosition: user && e.signups.indexOf(user) >= e.capacity ? e.signups.indexOf(user) - e.capacity + 1 : null
   };
 }
 function stats(db, user) {
   const mine = db.events.filter((e) => statusFor(e, user));
-  const joined = mine.filter((e) => statusFor(e, user) === "joined");
+  const joined = mine.filter((e) => statusFor(e, user) === "joined" && !e.canceled); // canceled events never count
+  const canceled = mine.filter((e) => e.canceled && !isPast(e)).sort((a, b) => (a.date + a.start).localeCompare(b.date + b.start)).map((e) => publicEvent(e, user));
   const completed = joined.filter(isPast).sort((a, b) => b.date.localeCompare(a.date))
     .map((e) => ({ ...publicEvent(e, user), approval: approvalOf(e, user), credited: creditOf(e, user) }));
   const upcoming = joined.filter((e) => !isPast(e)).sort((a, b) => (a.date + a.start).localeCompare(b.date + b.start)).map((e) => publicEvent(e, user));
-  const waitlisted = mine.filter((e) => statusFor(e, user) === "waitlisted" && !isPast(e)).map((e) => publicEvent(e, user));
+  const waitlisted = mine.filter((e) => statusFor(e, user) === "waitlisted" && !isPast(e) && !e.canceled).map((e) => publicEvent(e, user));
   const adjustments = db.adjustments.filter((a) => a.username === user);
   const adjTotal = adjustments.reduce((s, a) => s + a.hours, 0);
   return {
     hours: round2(completed.reduce((s, e) => s + e.credited, 0) + adjTotal),
     pendingHours: round2(completed.filter((e) => e.approval === "pending").reduce((s, e) => s + e.hours, 0)),
-    joinedCount: joined.length, upcoming, completed, waitlisted, adjustments
+    joinedCount: joined.length, upcoming, completed, waitlisted, canceled, adjustments
   };
 }
 const csvCell = (v) => {
@@ -175,6 +176,7 @@ const server = http.createServer(async (req, res) => {
       const e = db.events.find((x) => x.id === m[1]);
       if (!e) return send(res, 404, { error: "Event not found." });
       if (m[2] === "join") {
+        if (e.canceled) return send(res, 400, { error: "That event was canceled." });
         if (isPast(e)) return send(res, 400, { error: "That event already happened." });
         if (!e.signups.includes(known)) e.signups.push(known);
       } else {
@@ -202,13 +204,18 @@ const server = http.createServer(async (req, res) => {
       if (p === "/api/admin/check") return send(res, 200, { ok: true });
 
       // create / delete events
-      if (p === "/api/admin/events" && req.method === "POST") {
-        const { title, description, location, date, start, end } = body;
-        const capacity = parseInt(body.capacity, 10);
+      const parseEvent = (b) => {
+        const { title, description, location, date, start, end } = b;
+        const capacity = parseInt(b.capacity, 10);
         if (!title || !/^\d{4}-\d{2}-\d{2}$/.test(date || "") || !/^\d{2}:\d{2}$/.test(start || "") || !/^\d{2}:\d{2}$/.test(end || "") || !(capacity > 0))
-          return send(res, 400, { error: "Title, date, start, end and capacity are required." });
-        if (end <= start) return send(res, 400, { error: "End time must be after start time." });
-        const e = { id: "e" + Date.now().toString(36), title: String(title).slice(0, 80), description: String(description || "").slice(0, 400), location: String(location || "").slice(0, 80), date, start, end, capacity, signups: [], attendance: {} };
+          return { error: "Title, date, start, end and capacity are required." };
+        if (end <= start) return { error: "End time must be after start time." };
+        return { fields: { title: String(title).slice(0, 80), description: String(description || "").slice(0, 400), location: String(location || "").slice(0, 80), date, start, end, capacity } };
+      };
+      if (p === "/api/admin/events" && req.method === "POST") {
+        const r = parseEvent(body);
+        if (r.error) return send(res, 400, { error: r.error });
+        const e = { id: "e" + Date.now().toString(36), ...r.fields, signups: [], attendance: {} };
         db.events.push(e); save(db);
         return send(res, 200, { event: publicEvent(e, null) });
       }
@@ -216,6 +223,22 @@ const server = http.createServer(async (req, res) => {
       if (m && req.method === "DELETE") {
         db.events = db.events.filter((e) => e.id !== m[1]); save(db);
         return send(res, 200, { ok: true });
+      }
+      if (m && req.method === "PUT") { // edit an event in place; sign-ups and approvals are kept
+        const e = db.events.find((x) => x.id === m[1]);
+        if (!e) return send(res, 404, { error: "Event not found." });
+        const r = parseEvent(body);
+        if (r.error) return send(res, 400, { error: r.error });
+        Object.assign(e, r.fields); save(db);
+        return send(res, 200, { event: publicEvent(e, null) });
+      }
+      m = p.match(/^\/api\/admin\/events\/([\w-]+)\/cancel$/);
+      if (m && req.method === "POST") { // cancel (or restore) without deleting sign-ups
+        const e = db.events.find((x) => x.id === m[1]);
+        if (!e) return send(res, 404, { error: "Event not found." });
+        if (body.canceled === false) delete e.canceled; else e.canceled = true;
+        save(db);
+        return send(res, 200, { event: publicEvent(e, null) });
       }
       m = p.match(/^\/api\/admin\/events\/([\w-]+)\/roster$/);
       if (m && req.method === "GET") {
@@ -226,7 +249,7 @@ const server = http.createServer(async (req, res) => {
 
       // hours review: finished events, one row per joined volunteer
       if (p === "/api/admin/review" && req.method === "GET") {
-        const events = db.events.filter(isPast).sort((a, b) => (b.date + b.end).localeCompare(a.date + a.end)).map((e) => ({
+        const events = db.events.filter((e) => isPast(e) && !e.canceled).sort((a, b) => (b.date + b.end).localeCompare(a.date + a.end)).map((e) => ({
           id: e.id, title: e.title, date: e.date, start: e.start, end: e.end, hours: hoursOf(e),
           people: e.signups.slice(0, e.capacity).map((u) => ({ email: u, name: nameOf(u), approval: approvalOf(e, u), credited: creditOf(e, u) }))
         })).filter((e) => e.people.length);
@@ -237,6 +260,7 @@ const server = http.createServer(async (req, res) => {
       if (m && req.method === "POST") {
         const e = db.events.find((x) => x.id === m[1]);
         if (!e) return send(res, 404, { error: "Event not found." });
+        if (e.canceled) return send(res, 400, { error: "That event was canceled." });
         const u = cleanName(body.email || body.username);
         if (!e.signups.slice(0, e.capacity).includes(u)) return send(res, 400, { error: "That person isn't on this event's roster." });
         e.attendance ||= {};
@@ -254,6 +278,7 @@ const server = http.createServer(async (req, res) => {
       if (m && req.method === "POST") {
         const e = db.events.find((x) => x.id === m[1]);
         if (!e) return send(res, 404, { error: "Event not found." });
+        if (e.canceled) return send(res, 400, { error: "That event was canceled." });
         e.attendance ||= {};
         let n = 0;
         e.signups.slice(0, e.capacity).forEach((u) => { if (!e.attendance[u]) { e.attendance[u] = { status: "approved", hours: round2(hoursOf(e)) }; n++; } });
