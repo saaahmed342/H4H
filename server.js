@@ -3,11 +3,14 @@
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
 
 const PORT = process.env.PORT || 3000;
 const ADMIN_CODE = process.env.ADMIN_CODE || "h4h-admin";
 const DATA_FILE = path.join(__dirname, "data.json");
 const PUBLIC = path.join(__dirname, "public");
+const UPLOADS = path.join(__dirname, "uploads"); // local-testing fallback for gallery photos
+const BUCKET = "gallery";                       // Supabase Storage bucket for gallery photos
 
 // ---------- storage ----------
 // With SUPABASE_URL + SUPABASE_SECRET_KEY set, all data is saved in a Supabase table (survives restarts).
@@ -47,10 +50,50 @@ async function flush() {
 }
 function save(db) { CACHE = db; flush(); }
 
+// ---------- gallery photo files ----------
+// Photos are JPEG files (the browser shrinks them first). With Supabase they live in the public "gallery"
+// bucket; without it they go in ./uploads. Only captions and file names are kept in the main database.
+const storageHeaders = (type) => {
+  const h = { apikey: SB_KEY, "Content-Type": type };
+  if (SB_KEY.startsWith("eyJ")) h.Authorization = "Bearer " + SB_KEY;
+  return h;
+};
+const imageUrl = (name) => (useSupabase ? `${SB_URL}/storage/v1/object/public/${BUCKET}/${name}` : `/uploads/${name}`);
+async function ensureBucket() {
+  try {
+    const r = await fetch(`${SB_URL}/storage/v1/bucket`, { method: "POST", headers: storageHeaders("application/json"), body: JSON.stringify({ id: BUCKET, name: BUCKET, public: true }) });
+    if (!r.ok) {
+      const t = await r.text();
+      if (!/already exists|duplicate/i.test(t)) console.warn(`Gallery: could not create the "${BUCKET}" storage bucket (${r.status}): ${t}. Create it by hand in Supabase: Storage > New bucket > "${BUCKET}" > Public.`);
+    }
+  } catch (e) { console.warn("Gallery: storage check failed:", e.message); }
+}
+async function putImage(name, buf) {
+  if (useSupabase) {
+    const r = await fetch(`${SB_URL}/storage/v1/object/${BUCKET}/${name}`, { method: "POST", headers: { ...storageHeaders("image/jpeg"), "Cache-Control": "max-age=31536000" }, body: buf });
+    if (!r.ok) throw new Error(`Storage upload failed (${r.status}): ${await r.text()}`);
+  } else {
+    fs.mkdirSync(UPLOADS, { recursive: true });
+    fs.writeFileSync(path.join(UPLOADS, name), buf);
+  }
+}
+async function removeImage(name) { // best effort: a leftover file is harmless, a failed delete shouldn't block the officer
+  try {
+    if (useSupabase) await fetch(`${SB_URL}/storage/v1/object/${BUCKET}/${name}`, { method: "DELETE", headers: storageHeaders("application/json") });
+    else fs.rmSync(path.join(UPLOADS, name), { force: true });
+  } catch (e) { console.warn("Gallery: could not delete", name, e.message); }
+}
+const isJpeg = (b) => b.length > 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff;
+const decodeJpeg = (b64, max) => {
+  if (typeof b64 !== "string" || !b64) return null;
+  const buf = Buffer.from(b64, "base64");
+  return isJpeg(buf) && buf.length <= max ? buf : null;
+};
+
 function seedData() {
   const day = (n) => { const d = new Date(); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
   return {
-    users: {}, adjustments: [],
+    users: {}, adjustments: [], photos: [],
     events: [
       { id: "e1", title: "Food Pantry Sorting", description: "Sort and shelve donated goods so families can shop on Saturday.", location: "Community Center, Room 2", date: day(3), start: "16:00", end: "18:00", capacity: 10, signups: [], attendance: {} },
       { id: "e2", title: "Park Cleanup", description: "Bring gloves and water. Bags and grabbers provided.", location: "Main entrance of the park", date: day(9), start: "10:00", end: "13:00", capacity: 15, signups: [], attendance: {} }
@@ -69,9 +112,10 @@ async function init() {
   }
   const fresh = !db;
   db = db || seedData();
-  db.users ||= {}; db.events ||= []; db.adjustments ||= [];
+  db.users ||= {}; db.events ||= []; db.adjustments ||= []; db.photos ||= [];
   CACHE = db;
   if (fresh) await writeOut(db);
+  if (useSupabase) await ensureBucket();
   console.log(`Storage: ${useSupabase ? "Supabase" : "local data.json"} (${Object.keys(db.users).length} volunteers, ${db.events.length} events)`);
 }
 
@@ -103,6 +147,11 @@ function publicEvent(e, user) {
     waitlistPosition: user && e.signups.indexOf(user) >= e.capacity ? e.signups.indexOf(user) - e.capacity + 1 : null
   };
 }
+function publicPhoto(db, ph) {
+  const ev = ph.eventId ? db.events.find((e) => e.id === ph.eventId) : null;
+  return { id: ph.id, url: imageUrl(ph.file), thumb: imageUrl(ph.thumb), caption: ph.caption || "", eventId: ev ? ev.id : null,
+    eventTitle: ev ? ev.title : ph.eventTitle || "", date: ev ? ev.date : "", createdAt: ph.createdAt };
+}
 function stats(db, user) {
   const mine = db.events.filter((e) => statusFor(e, user));
   const joined = mine.filter((e) => statusFor(e, user) === "joined" && !e.canceled); // canceled events never count
@@ -130,10 +179,10 @@ function send(res, code, body, type = "application/json") {
   res.writeHead(code, { "Content-Type": type });
   res.end(type === "application/json" ? JSON.stringify(body) : body);
 }
-function readBody(req) {
+function readBody(req, limit = 1e5) {
   return new Promise((resolve) => {
     let b = "";
-    req.on("data", (c) => { b += c; if (b.length > 1e5) req.destroy(); });
+    req.on("data", (c) => { b += c; if (b.length > limit) req.destroy(); });
     req.on("end", () => { try { resolve(JSON.parse(b || "{}")); } catch { resolve({}); } });
   });
 }
@@ -148,7 +197,8 @@ const server = http.createServer(async (req, res) => {
     const user = cleanName(req.headers["x-username"]);
     const known = user && hasUser(db, user) ? user : null;
     const isAdmin = req.headers["x-admin-code"] === ADMIN_CODE;
-    const body = req.method === "GET" ? {} : await readBody(req);
+    const bigUpload = isAdmin && p === "/api/admin/photos" && req.method === "POST"; // two shrunken JPEGs as base64
+    const body = req.method === "GET" ? {} : await readBody(req, bigUpload ? 8e6 : 1e5);
     let m;
 
     // log in, or create an account (email + name, no password)
@@ -168,6 +218,11 @@ const server = http.createServer(async (req, res) => {
     if (p === "/api/events" && req.method === "GET") {
       const list = db.events.map((e) => publicEvent(e, known)).sort((a, b) => (a.date + a.start).localeCompare(b.date + b.start));
       return send(res, 200, { events: list });
+    }
+
+    if (p === "/api/photos" && req.method === "GET") {
+      const list = db.photos.slice().sort((a, b) => b.createdAt - a.createdAt).map((ph) => publicPhoto(db, ph));
+      return send(res, 200, { photos: list });
     }
 
     m = p.match(/^\/api\/events\/([\w-]+)\/(join|leave)$/);
@@ -325,6 +380,38 @@ const server = http.createServer(async (req, res) => {
         return send(res, 200, { ok: true });
       }
 
+      // gallery photos
+      if (p === "/api/admin/photos" && req.method === "POST") {
+        const full = decodeJpeg(body.full, 3.5e6), thumb = decodeJpeg(body.thumb, 6e5);
+        if (!full || !thumb) return send(res, 400, { error: "That file isn't a usable photo. Try a different one." });
+        const ev = body.eventId ? db.events.find((e) => e.id === body.eventId) : null;
+        if (body.eventId && !ev) return send(res, 400, { error: "That event no longer exists." });
+        const id = crypto.randomBytes(8).toString("hex");
+        try {
+          await putImage(id + ".jpg", full);
+          try { await putImage(id + "-t.jpg", thumb); } catch (e) { await removeImage(id + ".jpg"); throw e; }
+        } catch (e) { console.error("Photo upload failed:", e.message); return send(res, 502, { error: "Couldn't save the photo. " + (useSupabase ? "Check that the Supabase \"gallery\" storage bucket exists and is public." : "") }); }
+        const ph = { id, file: id + ".jpg", thumb: id + "-t.jpg", caption: String(body.caption || "").trim().slice(0, 140), eventId: ev ? ev.id : null, eventTitle: ev ? ev.title : "", createdAt: Date.now() };
+        db.photos.push(ph); save(db);
+        return send(res, 200, { photo: publicPhoto(db, ph) });
+      }
+      m = p.match(/^\/api\/admin\/photos\/([\w-]+)$/);
+      if (m && req.method === "PUT") {
+        const ph = db.photos.find((x) => x.id === m[1]);
+        if (!ph) return send(res, 404, { error: "Photo not found." });
+        const ev = body.eventId ? db.events.find((e) => e.id === body.eventId) : null;
+        if (body.eventId && !ev) return send(res, 400, { error: "That event no longer exists." });
+        ph.caption = String(body.caption || "").trim().slice(0, 140);
+        ph.eventId = ev ? ev.id : null; ph.eventTitle = ev ? ev.title : "";
+        save(db);
+        return send(res, 200, { photo: publicPhoto(db, ph) });
+      }
+      if (m && req.method === "DELETE") {
+        const ph = db.photos.find((x) => x.id === m[1]);
+        if (ph) { db.photos = db.photos.filter((x) => x.id !== ph.id); save(db); await removeImage(ph.file); await removeImage(ph.thumb); }
+        return send(res, 200, { ok: true });
+      }
+
       // CSV export
       if (p === "/api/admin/export" && req.method === "GET") {
         const lines = [["name", "email", "events_joined", "approved_hours", "pending_hours"].join(",")];
@@ -333,6 +420,15 @@ const server = http.createServer(async (req, res) => {
       }
     }
     return send(res, 404, { error: "Not found." });
+  }
+
+  // gallery photos kept on disk (local testing only; with Supabase they are served from its storage)
+  let um = p.match(/^\/uploads\/([a-f0-9]{16}(?:-t)?\.jpg)$/);
+  if (um && !useSupabase) {
+    const f = path.join(UPLOADS, um[1]);
+    if (!fs.existsSync(f)) return send(res, 404, "Not found", "text/plain");
+    res.writeHead(200, { "Content-Type": "image/jpeg", "Cache-Control": "public, max-age=31536000, immutable" });
+    return res.end(fs.readFileSync(f));
   }
 
   // static files
