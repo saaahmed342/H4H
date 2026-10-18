@@ -397,7 +397,7 @@ async function drawVolunteers(body, redraw) {
   const { volunteers } = await api("/admin/volunteers");
   body.innerHTML = `<div class="panel">
     <div class="section-title" style="margin-bottom:12px"><h3 style="font-size:22px">${volunteers.length} volunteer${volunteers.length === 1 ? "" : "s"}</h3>
-      <div style="display:flex;gap:8px;flex-wrap:wrap"><input id="vq" placeholder="Search name or email" aria-label="Search volunteers" style="width:220px"><button class="btn ghost" id="csv">Export CSV</button></div></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap"><input id="vq" placeholder="Search name or email" aria-label="Search volunteers" style="width:220px"><button class="btn ghost" id="csv">Export CSV</button><button class="btn ghost" id="bak">Download backup</button><button class="btn ghost" id="bakz">Backup with photos (.zip)</button></div></div>
     <div class="scroll"><table><thead><tr><th>Volunteer</th><th>Events</th><th>Approved hrs</th><th>Pending hrs</th><th></th></tr></thead><tbody id="vrows"></tbody></table></div></div>
     <div id="vdetail" style="margin-top:16px"></div>`;
   const rows = () => {
@@ -411,6 +411,17 @@ async function drawVolunteers(body, redraw) {
     const r = await fetch("/api/admin/export", { headers: { "x-admin-code": store.admin } });
     const url = URL.createObjectURL(await r.blob()), a = document.createElement("a");
     a.href = url; a.download = "h4h-volunteer-hours.csv"; a.click(); URL.revokeObjectURL(url);
+  };
+  $("#bakz").onclick = async () => { // a one-time link lets the browser stream a big zip straight to disk
+    try { const { token } = await api("/admin/backup-token", "POST"); location.href = "/api/backup-all?t=" + token; toast("Preparing the backup. With many photos this can take a minute."); }
+    catch (e) { toast(e.message); }
+  };
+  $("#bak").onclick = async () => { // everything on the site as one file (contains emails: keep it private)
+    const r = await fetch("/api/admin/backup", { headers: { "x-admin-code": store.admin } });
+    if (!r.ok) { toast("Couldn't download the backup."); return; }
+    const url = URL.createObjectURL(await r.blob()), a = document.createElement("a");
+    a.href = url; a.download = `h4h-backup-${new Date().toISOString().slice(0, 10)}.json`; a.click(); URL.revokeObjectURL(url);
+    toast("Backup downloaded. Keep it somewhere private.");
   };
   async function detail(u) {
     const d = await api("/admin/volunteers/" + encodeURIComponent(u));
