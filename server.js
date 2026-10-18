@@ -10,6 +10,8 @@ const ADMIN_CODE = process.env.ADMIN_CODE || "h4h-admin";
 const DATA_FILE = path.join(__dirname, "data.json");
 const PUBLIC = path.join(__dirname, "public");
 const UPLOADS = path.join(__dirname, "uploads"); // local-testing fallback for gallery photos
+const BACKUPS = path.join(__dirname, "backups"); // local-testing fallback for monthly snapshots
+const KEEP_BACKUPS = 12;                          // how many monthly snapshots to keep
 const BUCKET = "gallery";                       // Supabase Storage bucket for gallery photos
 
 // ---------- storage ----------
@@ -49,6 +51,98 @@ async function flush() {
   finally { saving = false; }
 }
 function save(db) { CACHE = db; flush(); }
+
+// ---------- monthly snapshots ----------
+// Once per calendar month the whole database is copied to a "backup-YYYY-MM" row in the same Supabase table
+// (or a file in ./backups when running locally). The newest 12 are kept. The check runs at startup and every 6 hours;
+// a month's snapshot is created once and never overwritten, so it holds the data as it was early in that month.
+async function monthlyBackup() {
+  if (!CACHE) return;
+  const d = new Date(), key = `backup-${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  try {
+    if (useSupabase) {
+      const r = await fetch(`${SB_URL}/rest/v1/h4h_store?on_conflict=key`, {
+        method: "POST",
+        headers: { ...sbHeaders(), Prefer: "resolution=ignore-duplicates,return=minimal" },
+        body: JSON.stringify([{ key, value: CACHE, updated_at: d.toISOString() }])
+      });
+      if (!r.ok) throw new Error(`write failed (${r.status}): ${await r.text()}`);
+      const l = await fetch(`${SB_URL}/rest/v1/h4h_store?key=like.backup-*&select=key&order=key.desc`, { headers: sbHeaders() });
+      if (!l.ok) throw new Error(`list failed (${l.status})`);
+      const old = (await l.json()).map((x) => x.key).slice(KEEP_BACKUPS);
+      if (old.length) await fetch(`${SB_URL}/rest/v1/h4h_store?key=in.(${old.join(",")})`, { method: "DELETE", headers: sbHeaders() });
+    } else {
+      fs.mkdirSync(BACKUPS, { recursive: true });
+      const f = path.join(BACKUPS, key + ".json");
+      if (!fs.existsSync(f)) fs.writeFileSync(f, JSON.stringify(CACHE, null, 2));
+      fs.readdirSync(BACKUPS).filter((n) => /^backup-\d{4}-\d{2}\.json$/.test(n)).sort().reverse().slice(KEEP_BACKUPS).forEach((n) => fs.rmSync(path.join(BACKUPS, n), { force: true }));
+    }
+  } catch (e) { console.warn("Monthly backup problem:", e.message); } // never let a backup problem stop the site
+}
+
+// ---------- full backup as a .zip (data + photo files) ----------
+// Built on the fly with no libraries: files are stored (JPEGs are already compressed) and sent one at a time,
+// so memory stays small even with many photos. Downloads use a one-time link because a browser can't send the
+// admin code with a plain download.
+const crcTable = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+const crc32 = (buf) => { let c = 0xffffffff; for (let i = 0; i < buf.length; i++) c = crcTable[(c ^ buf[i]) & 0xff] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; };
+function dosTime(d) { return { time: (d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1), date: ((d.getFullYear() - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate() }; }
+class ZipStream {
+  constructor(res) { this.res = res; this.entries = []; this.offset = 0; this.when = dosTime(new Date()); }
+  async write(buf) {
+    if (this.res.destroyed) throw new Error("client went away");
+    this.offset += buf.length;
+    if (!this.res.write(buf)) await new Promise((ok) => this.res.once("drain", ok));
+  }
+  async add(name, data) {
+    const nameBuf = Buffer.from(name, "utf8"), crc = crc32(data), h = Buffer.alloc(30);
+    h.writeUInt32LE(0x04034b50, 0); h.writeUInt16LE(20, 4); h.writeUInt16LE(0x0800, 6); h.writeUInt16LE(0, 8);
+    h.writeUInt16LE(this.when.time, 10); h.writeUInt16LE(this.when.date, 12); h.writeUInt32LE(crc, 14);
+    h.writeUInt32LE(data.length, 18); h.writeUInt32LE(data.length, 22); h.writeUInt16LE(nameBuf.length, 26); h.writeUInt16LE(0, 28);
+    this.entries.push({ nameBuf, crc, size: data.length, offset: this.offset });
+    await this.write(h); await this.write(nameBuf); await this.write(data);
+  }
+  async finish() {
+    const start = this.offset;
+    for (const e of this.entries) {
+      const c = Buffer.alloc(46);
+      c.writeUInt32LE(0x02014b50, 0); c.writeUInt16LE(20, 4); c.writeUInt16LE(20, 6); c.writeUInt16LE(0x0800, 8); c.writeUInt16LE(0, 10);
+      c.writeUInt16LE(this.when.time, 12); c.writeUInt16LE(this.when.date, 14); c.writeUInt32LE(e.crc, 16);
+      c.writeUInt32LE(e.size, 20); c.writeUInt32LE(e.size, 24); c.writeUInt16LE(e.nameBuf.length, 28);
+      c.writeUInt32LE(e.offset, 42);
+      await this.write(c); await this.write(e.nameBuf);
+    }
+    const end = Buffer.alloc(22), cdSize = this.offset - start;
+    end.writeUInt32LE(0x06054b50, 0); end.writeUInt16LE(this.entries.length, 8); end.writeUInt16LE(this.entries.length, 10);
+    end.writeUInt32LE(cdSize, 12); end.writeUInt32LE(start, 16);
+    await this.write(end); this.res.end();
+  }
+}
+const backupTokens = new Map(); // one-time download links, valid for 2 minutes
+const slug = (t) => String(t || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "no-event";
+async function readImage(name) {
+  if (useSupabase) {
+    const r = await fetch(imageUrl(name));
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return Buffer.from(await r.arrayBuffer());
+  }
+  return fs.readFileSync(path.join(UPLOADS, name));
+}
+async function streamFullBackup(res, db) {
+  const day = new Date().toISOString().slice(0, 10);
+  res.writeHead(200, { "Content-Type": "application/zip", "Content-Disposition": `attachment; filename="h4h-full-backup-${day}.zip"` });
+  const zip = new ZipStream(res), problems = [];
+  const csv = [["photo_file", "event", "caption", "uploaded"].join(",")];
+  await zip.add("data.json", Buffer.from(JSON.stringify(db, null, 2)));
+  for (const ph of db.photos) {
+    const pub = publicPhoto(db, ph), folder = slug(pub.eventTitle), file = `photos/${folder}/${ph.id}.jpg`;
+    try { await zip.add(file, await readImage(ph.file)); csv.push([file, pub.eventTitle, pub.caption, new Date(ph.createdAt).toISOString().slice(0, 10)].map(csvCell).join(",")); }
+    catch (e) { problems.push(`${file}: ${e.code === "ENOENT" ? "the file is missing from storage" : e.message}`); }
+  }
+  await zip.add("photos.csv", Buffer.from(csv.join("\n")));
+  if (problems.length) await zip.add("problems.txt", Buffer.from("These photos could not be added to this backup:\n" + problems.join("\n")));
+  await zip.finish();
+}
 
 // ---------- gallery photo files ----------
 // Photos are JPEG files (the browser shrinks them first). With Supabase they live in the public "gallery"
@@ -116,6 +210,8 @@ async function init() {
   CACHE = db;
   if (fresh) await writeOut(db);
   if (useSupabase) await ensureBucket();
+  await monthlyBackup();
+  setInterval(monthlyBackup, 6 * 3600 * 1000);
   console.log(`Storage: ${useSupabase ? "Supabase" : "local data.json"} (${Object.keys(db.users).length} volunteers, ${db.events.length} events)`);
 }
 
@@ -249,6 +345,14 @@ const server = http.createServer(async (req, res) => {
         save(db);
       }
       return send(res, 200, { email: known, displayName: db.users[known].displayName, createdAt: db.users[known].createdAt, ...stats(db, known) });
+    }
+
+    if (p === "/api/backup-all" && req.method === "GET") {
+      const t = url.searchParams.get("t") || "", exp = backupTokens.get(t);
+      backupTokens.delete(t); // single use
+      if (!exp || exp < Date.now()) return send(res, 403, { error: "That download link expired. Go back to Admin and click the button again." });
+      try { await streamFullBackup(res, db); } catch (e) { console.error("Full backup stopped:", e.message); res.destroy(); }
+      return;
     }
 
     // ----- admin -----
@@ -410,6 +514,18 @@ const server = http.createServer(async (req, res) => {
         const ph = db.photos.find((x) => x.id === m[1]);
         if (ph) { db.photos = db.photos.filter((x) => x.id !== ph.id); save(db); await removeImage(ph.file); await removeImage(ph.thumb); }
         return send(res, 200, { ok: true });
+      }
+
+      if (p === "/api/admin/backup-token" && req.method === "POST") {
+        for (const [k, v] of backupTokens) if (v < Date.now()) backupTokens.delete(k);
+        const t = crypto.randomBytes(24).toString("hex"); backupTokens.set(t, Date.now() + 120000);
+        return send(res, 200, { token: t });
+      }
+      // data-only backup download (small JSON file; photo files are in the full .zip backup)
+      if (p === "/api/admin/backup" && req.method === "GET") {
+        const day = new Date().toISOString().slice(0, 10);
+        res.writeHead(200, { "Content-Type": "application/json", "Content-Disposition": `attachment; filename="h4h-backup-${day}.json"` });
+        return res.end(JSON.stringify(db, null, 2));
       }
 
       // CSV export
